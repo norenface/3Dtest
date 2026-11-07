@@ -125,13 +125,32 @@ addEventListener('shotengai:escaped', () => { /* クリア処理 */ });
 
 ## 使い方
 
+### 手元の PC に持ってくる
+
+```bash
+git clone -b ccr-f538f5ca-mz2c54 https://github.com/norenface/3Dtest.git
+cd 3Dtest
+```
+
+生成済みのモデル・テクスチャ・HDRI はすべてリポジトリに入っているので、**歩き回るだけなら
+Python（標準の `http.server`）だけで動きます**（下の「歩き回る」）。
+商店街を作り直すときだけ、次の準備が必要です。
+
 ### 商店街を作り直す
 
 ```bash
-pip install bpy==5.2.3 pillow         # Blender 5.2 を Python モジュールとして使う
-apt-get install -y fonts-noto-cjk     # 看板の日本語フォント
-python3 blender/build_shotengai.py    # 約 1 分で assets/ と blender/shotengai.blend を再生成
+# Python 3.13 が必要（bpy 5.2.3 は Python 3.13 専用）。仮想環境の利用を推奨
+python3.13 -m venv .venv
+source .venv/bin/activate              # Windows は .venv\Scripts\activate
+pip install bpy==5.2.3 pillow          # Blender 5.2 を Python モジュールとして使う（約 400 MB）
+python blender/build_shotengai.py      # 約 1 分で assets/ と blender/shotengai.blend を再生成
 ```
+
+* 看板の日本語フォントは OS の標準フォントを自動で探します
+  （Linux: Noto CJK［`apt-get install fonts-noto-cjk`］、macOS: ヒラギノ、Windows: 游ゴシック／メイリオ・游明朝）。
+  見つからないときは環境変数 `SHOTENGAI_FONT_BOLD` / `SHOTENGAI_FONT_REG` / `SHOTENGAI_FONT_SERIF` で
+  フォントファイルを指定します。フォントが変わると看板の書体も変わります。
+* `blender/shotengai.blend`（Blender で開ける編集用ファイル）はこのビルドで作られます（git 管理外）。
 
 * 初回は Poly Haven から素材（約 47 MB）を `blender/cache/` にダウンロードします。
   ネットワークで `api.polyhaven.com` と `dl.polyhaven.org` への接続が必要です

@@ -9,10 +9,50 @@ import random
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-FONT_BOLD = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
-FONT_REG = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-FONT_SERIF = "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"   # 明朝体（老舗っぽい看板用）
-FONT_JP_INDEX = 0  # ttc 内の JP フェイス
+# 日本語フォントは OS ごとに場所が違うので、候補を順に探す。
+# 環境変数 SHOTENGAI_FONT_BOLD / SHOTENGAI_FONT_REG / SHOTENGAI_FONT_SERIF で直接指定もできる。
+_FONT_CANDIDATES = {
+    "BOLD": [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",          # Linux (fonts-noto-cjk)
+        "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",               # macOS
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "C:/Windows/Fonts/YuGothB.ttc",                                  # Windows
+        "C:/Windows/Fonts/meiryob.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+    ],
+    "REG": [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "C:/Windows/Fonts/YuGothM.ttc",
+        "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+    ],
+    "SERIF": [  # 明朝体（老舗っぽい看板用）。無ければゴシックで代用
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+        "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
+        "C:/Windows/Fonts/yumindb.ttf",
+        "C:/Windows/Fonts/YuMincho.ttc",
+        "C:/Windows/Fonts/msmincho.ttc",
+    ],
+}
+
+
+def _find_font(kind, fallback=None):
+    env = os.environ.get("SHOTENGAI_FONT_" + kind)
+    for path in ([env] if env else []) + _FONT_CANDIDATES[kind]:
+        if path and os.path.exists(path):
+            return path
+    if fallback:
+        return fallback
+    raise FileNotFoundError(
+        f"日本語フォント ({kind}) が見つかりません。Linux なら fonts-noto-cjk を入れるか、"
+        f"環境変数 SHOTENGAI_FONT_{kind} にフォントファイルのパスを指定してください。")
+
+
+FONT_BOLD = _find_font("BOLD")
+FONT_REG = _find_font("REG", fallback=FONT_BOLD)
+FONT_SERIF = _find_font("SERIF", fallback=FONT_BOLD)
+FONT_JP_INDEX = 0  # ttc 内の最初のフェイス（Noto CJK では JP）
 
 
 def _font(size, bold=True, serif=False):
