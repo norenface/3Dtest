@@ -1,0 +1,7 @@
+__pycache__/
+*.blend1
+node_modules/
+blender/cache/
+
+# Blender の編集用ファイルはビルドで生成する（約60MBあるためコミットしない）
+blender/shotengai.blend

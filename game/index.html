@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ひかり通り商店街 ウォークスルー</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8db4e2; font-family: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif; }
+  canvas { display: block; }
+  #hud-section { position: fixed; top: 14px; left: 14px; padding: 8px 14px; border-radius: 8px; color: #fff; font-weight: 700; font-size: 18px; background: rgba(0,0,0,.45); border-left: 8px solid #888; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255,255,255,.85); box-shadow: 0 0 0 1px rgba(0,0,0,.4); pointer-events: none; }
+  #prompt { position: fixed; left: 50%; bottom: 18%; transform: translateX(-50%); padding: 8px 16px; border-radius: 8px; background: rgba(0,0,0,.6); color: #fff; font-size: 16px; display: none; white-space: nowrap; }
+  #prompt b { display: inline-block; padding: 0 7px; margin-right: 6px; border-radius: 4px; background: #fff; color: #000; }
+  #message { position: fixed; left: 50%; bottom: 6%; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); box-sizing: border-box; padding: 14px 18px; border-radius: 10px; background: rgba(15,20,30,.85); color: #fff; font-size: 16px; line-height: 1.6; display: none; }
+  #minimap { position: fixed; right: 14px; bottom: 14px; border-radius: 8px; background: rgba(0,0,0,.45); }
+  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(10,15,25,.55); color: #fff; text-align: center; cursor: pointer; }
+  #overlay .box { padding: 24px 32px; border-radius: 12px; background: rgba(0,0,0,.55); max-width: calc(100% - 32px); box-sizing: border-box; }
+  #overlay h1 { margin: 0 0 10px; font-size: 26px; }
+  #overlay p { margin: 6px 0; font-size: 15px; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 20px; background: #223; }
+</style>
+</head>
+<body>
+<div id="loading">読み込み中…</div>
+<div id="hud-section">—</div>
+<div id="crosshair"></div>
+<div id="prompt"></div>
+<div id="message"></div>
+<canvas id="minimap" width="300" height="70"></canvas>
+<div id="overlay"><div class="box">
+  <h1>ひかり通り商店街</h1>
+  <p>クリックで開始</p>
+  <p>WASD / 矢印キー：移動　マウス：視点　Shift：走る</p>
+  <p>E：調べる　Esc：一時停止</p>
+</div></div>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
