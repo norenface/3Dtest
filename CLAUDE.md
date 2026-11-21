@@ -8,7 +8,15 @@
 * **固有名詞の扱い**: 原作固有の固有名詞（作中キャラ名や原作そのままの固有名詞）は直接使用せず、一般的なファンタジー用語（バーバリアン／蛮族、エルフ、ドワーフ、精髄、リフト、古文書など）でシステムを再現する。
 
 ## 2. 技術構成
-* **言語・ライブラリ**: HTML5 / CSS3 / JavaScript (ES Modules)、3D描画に Three.js（CDN経由で読み込み）。
+* **言語・ライブラリ**: HTML5 / CSS3 / JavaScript (ES Modules)、3D描画に Three.js。
+* **Three.js の読み込み**: CDN は使わず、リポジトリに同梱した `vendor/three/`（r170）をインポートマップで読み込む（オフラインでも動き、クラウド環境のブラウザ検証でも外部接続が要らないため）。
+  ```html
+  <script type="importmap">
+  { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
+  ```
+  * 同梱済みのアドオン: `loaders/GLTFLoader.js`、`geometries/RoundedBoxGeometry.js`、`utils/BufferGeometryUtils.js`、`utils/SkeletonUtils.js`。ほかのアドオンが必要になったら、同じバージョン（three@0.170.0 の `examples/jsm/`）から依存ファイルごと `vendor/three/addons/` にコピーする。
+  * ES Modules は `file://` では読み込めないため、ローカルでは `python3 -m http.server` などで配信して開く。
 * **ファイル構成（まずは単一HTMLまたは3ファイル分割で開始）**:
   * `index.html`（または `game.html`）: 画面レイアウト、HUD、精髄管理モーダル、拠点画面、ゲームループ。
   * `data.js`（またはJSON埋め込み）: 種族・精髄・モンスター・階層・古文書（攻略情報）のマスターデータ。
