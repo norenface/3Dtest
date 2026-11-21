@@ -1,10 +1,11 @@
-// 精髄の迷宮 — Step 1（MVP）
-// 3D ダンジョン（一人称視点）・プレイヤーの移動と攻撃・敵 3 種・精髄のドロップと吸収・制限時間。
+// 精髄の迷宮 — Step 2
+// 3D ダンジョン（一人称視点）・移動と攻撃・敵 3 種・精髄のドロップと吸収・精髄スキル・回復薬・制限時間・拠点。
 // ゲームバランスの数値はすべて data.js から読む。入力は input.js、保存は storage.js 経由。
 import * as THREE from 'three';
 import * as D from './data.js';
 import { Input } from './input.js';
 import * as Store from './storage.js';
+import { openHub } from './hub.js';
 import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makeExitStone, flatMat } from './models.js';
 
 const $ = sel => document.querySelector(sel);
@@ -75,15 +76,17 @@ function computeStats() {
   }
   const mult = (key, field) => passives.reduce((m, p) => m * (D.PASSIVES[p]?.[field] ?? 1), 1);
   const extra = (field) => passives.reduce((s, p) => s + (D.PASSIVES[p]?.[field] ?? 0), 0);
+  const weapon = D.HUB.weapons[save.weaponLevel] ?? D.HUB.weapons[0];
+  const armor = D.HUB.armors[save.armorLevel] ?? D.HUB.armors[0];
   return {
-    race, stats, passives,
+    race, stats, passives, weapon, armor,
     capacity: race.soulCapacity, used,
-    maxHp: Math.round(F.hpBase + stats.VIT * F.hpPerVIT),
+    maxHp: Math.round(F.hpBase + stats.VIT * F.hpPerVIT + armor.hpBonus),
     maxStamina: Math.round(F.staminaBase + stats.VIT * F.staminaPerVIT + stats.AGI * F.staminaPerAGI),
-    attack: stats.STR * F.attackPerSTR,
+    attack: stats.STR * F.attackPerSTR + weapon.attackBonus,
     moveSpeed: (F.moveSpeedBase + stats.AGI * F.moveSpeedPerAGI) * mult('', 'moveSpeedMultiplier'),
     meleeMultiplier: mult('', 'meleeDamageMultiplier'),
-    damageTakenMultiplier: mult('', 'damageTakenMultiplier'),
+    damageTakenMultiplier: mult('', 'damageTakenMultiplier') * armor.damageTakenMultiplier,
     flinchMultiplier: mult('', 'flinchMultiplier'),
     extraStones: extra('extraStones'),
   };
@@ -303,6 +306,11 @@ const player = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), facing: 0,
   hp: 1, stamina: 1, attackTimer: 0, attackCooldown: 0, hitDone: false,
   flinch: 0, invuln: 0, staminaDelay: 0, walkPhase: 0, dead: false,
+  attackKind: 'normal',        // normal（通常攻撃） / skill（急所突きなどの近接スキル）
+  attackSkill: null,
+  skillCooldowns: {},          // スキル ID → 残り秒数
+  guardTimer: 0, guardMultiplier: 1,
+  potionCooldown: 0,
   viewmodel: makeViewmodel(D.RACES.barbarian.color),
   st: null,
 };
@@ -337,7 +345,7 @@ function spawnMonster(id, pos) {
   const m = {
     def, model, mats, bar,
     pos: pos.clone(), home: pos.clone(), vel: new THREE.Vector3(), facing: Math.random() * Math.PI * 2,
-    hp: def.hp, state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10,
+    hp: def.hp, state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10, stun: 0,
     path: null, pathTimer: 0, aggro: false, wanderTarget: null, deadTimer: 0,
   };
   world.monsters.push(m);
@@ -511,25 +519,94 @@ function playerAttack() {
   player.attackTimer = 0.32;
   player.attackCooldown = F.attackCooldown;
   player.hitDone = false;
+  player.attackKind = 'normal';
+  player.attackSkill = null;
 }
 
 function resolvePlayerHit() {
   const fx = -Math.sin(player.facing), fz = -Math.cos(player.facing);
-  const cosArc = Math.cos(THREE.MathUtils.degToRad(F.attackArcDeg / 2));
+  const sk = player.attackKind === 'skill' ? player.attackSkill : null;
+  const range = sk ? sk.range : F.attackRange;
+  const cosArc = Math.cos(THREE.MathUtils.degToRad((sk ? sk.arcDeg : F.attackArcDeg) / 2));
+  const skillMult = sk ? sk.damageMultiplier : 1;
   let hits = 0;
   for (const m of world.monsters) {
     if (m.state === 'dead') continue;
     const dx = m.pos.x - player.pos.x, dz = m.pos.z - player.pos.z;
     const d = Math.hypot(dx, dz);
-    if (d > F.attackRange + m.def.radius) continue;
+    if (d > range + m.def.radius) continue;
     if (d > 0.3 && (dx * fx + dz * fz) / d < cosArc) continue;
     const crit = Math.random() < 0.08;
-    let dmg = player.st.attack * player.st.meleeMultiplier * (0.9 + Math.random() * 0.2) * (crit ? 1.6 : 1);
+    let dmg = player.st.attack * player.st.meleeMultiplier * skillMult * (0.9 + Math.random() * 0.2) * (crit ? 1.6 : 1);
     dmg = Math.max(1, Math.round(dmg - m.def.defense));
     hitMonster(m, dmg, crit, dx / (d || 1), dz / (d || 1));
     hits++;
   }
   if (hits) world.hitStop = F.hitStop;
+}
+
+// 精髄スキルの発動（スロット番号 0〜3）
+function useSkill(slot) {
+  const id = save.skillSlots[slot];
+  if (!id || player.dead || player.flinch > 0) return;
+  const sk = D.ACTIVE_SKILLS[id];
+  const cd = player.skillCooldowns[id] || 0;
+  if (cd > 0) { log(`${sk.name}はまだ使えない（あと ${Math.ceil(cd)} 秒）`); return; }
+  if (player.stamina < sk.staminaCost) { log('スタミナが足りない'); return; }
+  if (sk.type === 'melee' && player.attackTimer > 0) return;
+  player.stamina -= sk.staminaCost;
+  player.staminaDelay = F.staminaRegenDelay;
+  player.skillCooldowns[id] = sk.cooldown;
+  world.run.skillsUsed++;
+  const head = new THREE.Vector3(player.pos.x, 1.4, player.pos.z);
+  if (sk.type === 'melee') {
+    player.attackTimer = 0.32;
+    player.attackCooldown = F.attackCooldown;
+    player.hitDone = false;
+    player.attackKind = 'skill';
+    player.attackSkill = sk;
+    const fx = -Math.sin(player.facing), fz = -Math.cos(player.facing);
+    burst(new THREE.Vector3(player.pos.x + fx * 1.5, 1.3, player.pos.z + fz * 1.5), sk.color, 18, 2, 1);
+  } else if (sk.type === 'stun') {
+    let n = 0;
+    for (const m of world.monsters) {
+      if (m.state === 'dead') continue;
+      if (Math.hypot(m.pos.x - player.pos.x, m.pos.z - player.pos.z) > sk.radius) continue;
+      m.stun = sk.stunTime;
+      m.aggro = true;
+      if (m.state === 'windup' || m.state === 'strike') { m.state = 'chase'; m.timer = 0; }
+      const p = m.pos.clone(); p.y = 2.2 + m.def.radius;
+      popup(p, 'ひるんだ！', 'gain');
+      n++;
+    }
+    for (let i = 0; i < 24; i++) {
+      const a = i / 24 * Math.PI * 2;
+      burst(new THREE.Vector3(player.pos.x + Math.cos(a) * 1.2, 1.2, player.pos.z + Math.sin(a) * 1.2), sk.color, 2, 6, 0.5);
+    }
+    camState.shake = 0.2;
+    log(`${sk.name}！ ${n} 体の敵がひるんだ。`);
+  } else if (sk.type === 'guard') {
+    player.guardTimer = sk.duration;
+    player.guardMultiplier = sk.damageTakenMultiplier;
+    burst(head, sk.color, 30, 2, 3);
+    log(`${sk.name}：${sk.duration} 秒間、受けるダメージが大きく減る。`);
+  }
+}
+
+function usePotion() {
+  const P = D.HUB.potion;
+  if (player.dead || player.potionCooldown > 0) return;
+  if (save.potions <= 0) { log(`${P.name}を持っていない`); return; }
+  if (player.hp >= player.st.maxHp) { log('HP は減っていない'); return; }
+  save.potions--;
+  world.run.potionsUsed++;
+  player.potionCooldown = P.cooldown;
+  const heal = Math.round(player.st.maxHp * P.heal);
+  player.hp = Math.min(player.st.maxHp, player.hp + heal);
+  const p = player.pos.clone(); p.y = 1.8;
+  popup(p, `+${heal}`, 'heal');
+  burst(new THREE.Vector3(player.pos.x, 1.0, player.pos.z), 0x7dff9a, 24, 2, 3);
+  log(`${P.name}を飲んだ（残り ${save.potions}）`);
 }
 
 function hitMonster(m, dmg, crit, nx, nz) {
@@ -551,6 +628,7 @@ function killMonster(m) {
   m.deadTimer = 0;
   m.bar.remove();
   world.run.kills++;
+  save.kills[m.def.id] = (save.kills[m.def.id] || 0) + 1;
   burst(new THREE.Vector3(m.pos.x, 0.8, m.pos.z), 0xbfe8ff, 40, 5, 3);
   // 魔石
   const count = m.def.stones + player.st.extraStones;
@@ -579,7 +657,9 @@ function dropEssence(id, pos) {
 
 function hurtPlayer(dmg, fromX, fromZ) {
   if (player.invuln > 0 || player.dead) return;
-  dmg = Math.max(1, Math.round(dmg * player.st.damageTakenMultiplier));
+  const guard = player.guardTimer > 0 ? player.guardMultiplier : 1;
+  dmg = Math.max(1, Math.round(dmg * player.st.damageTakenMultiplier * guard));
+  if (guard < 1) burst(new THREE.Vector3(player.pos.x, 1.2, player.pos.z), 0xffb347, 12, 3, 1);
   player.hp -= dmg;
   player.invuln = F.invulnTime;
   player.flinch = F.flinchTime * player.st.flinchMultiplier;
@@ -613,7 +693,12 @@ function updatePlayer(dt) {
   camState.pitch = THREE.MathUtils.clamp(camState.pitch + look.pitch, -1.2, 1.2);
   player.facing = camState.yaw;   // 一人称なので体の向き = 視線の向き
 
+  player.guardTimer = Math.max(0, player.guardTimer - dt);
+  player.potionCooldown = Math.max(0, player.potionCooldown - dt);
+  for (const id in player.skillCooldowns) player.skillCooldowns[id] = Math.max(0, player.skillCooldowns[id] - dt);
   if (input.consume('attack') && !player.dead) playerAttack();
+  for (let i = 0; i < D.MAX_SKILL_SLOTS; i++) if (input.consume('skill' + i)) useSkill(i);
+  if (input.consume('potion')) usePotion();
 
   // 移動（カメラの向き基準）
   let mx = input.move.x, my = input.move.y;
@@ -659,7 +744,13 @@ function updatePlayer(dt) {
   const bobX = moving ? Math.cos(player.walkPhase) * 0.025 : 0;
   const bobY = moving ? -Math.abs(Math.sin(player.walkPhase)) * 0.03 : Math.sin(world.clock * 1.6) * 0.006;
   vm.group.position.set(0.42 + bobX, -0.42 + bobY, -0.62);
-  if (player.attackTimer > 0) {
+  if (player.attackTimer > 0 && player.attackKind === 'skill') {
+    // 急所突き：引いてから前へ突き出す
+    const t = 1 - player.attackTimer / 0.32;
+    const k = t < 0.35 ? -t / 0.35 : Math.min(1, (t - 0.35) / 0.25);
+    V.swing.rotation.set(-1.0 * Math.min(1, t * 3), 0, 0.15);
+    V.swing.position.set(-0.18 * Math.min(1, t * 3), 0.1, -0.55 * k);
+  } else if (player.attackTimer > 0) {
     const t = 1 - player.attackTimer / 0.32;          // 0 → 1
     if (t < 0.3) {                                     // 振りかぶる（右上へ）
       const k = t / 0.3;
@@ -708,6 +799,18 @@ function updateMonsters(dt) {
 
     let moveDir = null, speedMul = 1;
     if (player.dead) m.aggro = false;
+    if (m.stun > 0) {
+      // ひるみ中：その場で動けない
+      m.stun -= dt;
+      m.pos.x += m.vel.x * dt; m.pos.z += m.vel.z * dt;
+      m.vel.multiplyScalar(Math.max(0, 1 - dt * 7));
+      collide(m.pos, def.radius);
+      animateMonster(m, 0);
+      m.model.parts.body.rotation.z = Math.sin(m.anim * 18) * 0.12;
+      if (Math.random() < dt * 6) burst(new THREE.Vector3(m.pos.x, 1.6 + def.radius, m.pos.z), 0xfff27a, 2, 1, 1);
+      continue;
+    }
+    m.model.parts.body.rotation.z = 0;
     switch (m.state) {
       case 'idle':
       case 'chase':
@@ -818,6 +921,7 @@ function animateMonster(m, speed) {
   for (const mat of m.mats) {
     if (!mat.userData.baseEmissive) mat.userData.baseEmissive = mat.emissive.clone();
     if (m.flash > 0) mat.emissive.setRGB(1, 1, 1);
+    else if (m.stun > 0) mat.emissive.setRGB(0.35, 0.3, 0.05);
     else if (windupGlow > 0) mat.emissive.setRGB(windupGlow, 0.05, 0.02);
     else mat.emissive.copy(mat.userData.baseEmissive);
   }
@@ -890,8 +994,47 @@ function updateCamera(dt) {
 }
 
 // ====================================================================== HUD
+// スキルバー（PC は画面下中央、スマホはボタン）。スロットの中身が変わったときだけ作り直す
+let skillBarKey = '';
+function updateSkillBar() {
+  const key = save.skillSlots.join(',') + '|' + document.body.classList.contains('touch');
+  if (key !== skillBarKey) {
+    skillBarKey = key;
+    $('#skillbar').innerHTML = Array.from({ length: D.MAX_SKILL_SLOTS }, (_, i) => {
+      const sk = D.ACTIVE_SKILLS[save.skillSlots[i]];
+      return `<div class="skill ${sk ? '' : 'empty'}" style="${sk ? `--c:#${sk.color.toString(16).padStart(6, '0')}` : ''}">
+        <span class="key">${i + 1}</span><span class="name">${sk ? sk.name : ''}</span><i class="cd"></i></div>`;
+    }).join('') + `<div class="skill potion"><span class="key">R</span><span class="name">回復薬</span><b class="count"></b><i class="cd"></i></div>`;
+    for (let i = 0; i < D.MAX_SKILL_SLOTS; i++) {
+      const b = $('#btn-skill-' + i), sk = D.ACTIVE_SKILLS[save.skillSlots[i]];
+      b.classList.toggle('hidden', !sk);
+      if (sk) { b.querySelector('span').textContent = sk.short; b.style.setProperty('--c', '#' + sk.color.toString(16).padStart(6, '0')); }
+    }
+  }
+  const items = $('#skillbar').children;
+  for (let i = 0; i < D.MAX_SKILL_SLOTS; i++) {
+    const id = save.skillSlots[i];
+    if (!id) continue;
+    const sk = D.ACTIVE_SKILLS[id], cd = player.skillCooldowns[id] || 0;
+    const frac = cd / sk.cooldown;
+    items[i].querySelector('.cd').style.height = (frac * 100) + '%';
+    items[i].classList.toggle('ready', cd <= 0 && player.stamina >= sk.staminaCost);
+    const b = $('#btn-skill-' + i);
+    b.querySelector('.cd').style.height = (frac * 100) + '%';
+    b.classList.toggle('ready', cd <= 0);
+  }
+  const potion = items[D.MAX_SKILL_SLOTS];
+  potion.querySelector('.count').textContent = '×' + save.potions;
+  potion.classList.toggle('empty', save.potions <= 0);
+  $('#btn-potion').querySelector('span').textContent = `回復 ${save.potions}`;
+  $('#btn-potion').classList.toggle('empty', save.potions <= 0);
+  $('#guard-indicator').classList.toggle('hidden', player.guardTimer <= 0);
+  if (player.guardTimer > 0) $('#guard-indicator').textContent = `岩の構え ${player.guardTimer.toFixed(1)}秒`;
+}
+
 function updateHUD() {
   const st = player.st;
+  updateSkillBar();
   $('#hp-bar i').style.width = (player.hp / st.maxHp * 100) + '%';
   $('#hp-text').textContent = `${Math.ceil(player.hp)} / ${st.maxHp}`;
   $('#st-bar i').style.width = (player.stamina / st.maxStamina * 100) + '%';
@@ -928,7 +1071,7 @@ function updateHUD() {
 
 // ====================================================================== 画面
 function show(id) {
-  for (const s of ['#title-screen', '#absorb-screen', '#menu-screen', '#result-screen', '#loading']) $(s).classList.add('hidden');
+  for (const s of ['#title-screen', '#absorb-screen', '#menu-screen', '#result-screen', '#hub-screen', '#loading']) $(s).classList.add('hidden');
   if (id) $(id).classList.remove('hidden');
 }
 
@@ -952,21 +1095,40 @@ function showTitle() {
   const race = D.RACES[save.race];
   $('#title-status').innerHTML = `
     <div class="kv"><span>種族</span><span>${race.name}</span></div>
-    <div class="kv"><span>所持している魔石</span><span>${save.stones}</span></div>
+    <div class="kv"><span>ゴールド / 魔石</span><span>${save.gold} G / ${save.stones} 個</span></div>
     <div class="kv"><span>探索回数 / 帰還成功</span><span>${save.runs} / ${save.clears}</span></div>
     ${statusSummaryHTML()}`;
   $('#btn-quality').textContent = `画質：${settings.quality === 'high' ? '高（PC 向け）' : '低（スマホ向け）'}`;
   show('#title-screen');
 }
 
+function showHub(message = '') {
+  world.state = 'hub';
+  releasePointer();
+  $('#hud').classList.add('hidden');
+  input.enabled = false;
+  input.clear();
+  openHub({
+    getSave: () => save,
+    computeStats,
+    onDepart: () => { startRun(0); input.lockPointer(); },
+    onTitle: showTitle,
+  }, message);
+  show('#hub-screen');
+}
+
 function startRun(floorIndex = 0) {
   const floorDef = D.FLOORS[floorIndex];
-  world.run = { floor: floorDef.id, stones: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, startedAt: performance.now() };
+  world.run = { floor: floorDef.id, stones: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0, startedAt: performance.now() };
   for (const el of document.querySelectorAll('.ebar, .popup')) el.remove();
   popups.length = 0;
   player.dead = false;
   player.vel.set(0, 0, 0);
   player.attackTimer = player.attackCooldown = player.flinch = player.invuln = 0;
+  player.guardTimer = player.potionCooldown = 0;
+  player.skillCooldowns = {};
+  player.attackKind = 'normal';
+  skillBarKey = '';
   camState.eyeNow = camState.eye;
   camState.shake = 0;
   refreshStats(false);
@@ -1007,7 +1169,7 @@ function openAbsorb(orb) {
     <div class="kv" style="margin-top:12px"><span>魂の器</span><span>${st.used} / ${st.capacity}（吸収後 ${st.used + (owned ? 0 : e.cost)}）</span></div>
     <div class="kv"><span>能力補正</span><span>${Object.entries(e.statBonus).map(([k, v]) => `${STAT_NAMES[k]} <span style="color:var(--st)">+${v}</span>`).join('　')}</span></div>
     <div class="kv"><span>パッシブ：${passive.name}</span><span class="muted">${passive.description}</span></div>
-    <div class="kv"><span>スキル：${active.name}</span><span class="muted">${active.description}（発動は今後実装）</span></div>
+    <div class="kv"><span>スキル：${active.name}</span><span class="muted">${active.description}（再使用 ${active.cooldown} 秒）</span></div>
     <div class="warn-text">${reason || '一度吸収した精髄は、原則として取り除けない。'}</div>
     <div class="btns row">
       <button class="btn primary" id="btn-absorb" ${owned || !fits ? 'disabled' : ''}>吸収する</button>
@@ -1017,6 +1179,9 @@ function openAbsorb(orb) {
   show('#absorb-screen');
   $('#btn-absorb').onclick = () => {
     save.absorbed.push(orb.id);
+    if (e.activeSkill && !save.skillSlots.includes(e.activeSkill) && save.skillSlots.length < D.MAX_SKILL_SLOTS) {
+      save.skillSlots.push(e.activeSkill);
+    }
     Store.saveGame(save);
     world.run.absorbed.push(orb.id);
     refreshStats(true);
@@ -1104,13 +1269,12 @@ function endRun(reason) {
     <div class="kv"><span>倒した敵</span><span>${run.kills}</span></div>
     <div class="kv"><span>持ち帰った魔石</span><span>${kept}（所持 ${save.stones}）</span></div>
     <div class="kv"><span>吸収した精髄</span><span>${run.absorbed.map(id => D.ESSENCES[id].name).join('・') || 'なし'}</span></div>
+    <div class="kv"><span>使ったスキル / 回復薬</span><span>${run.skillsUsed} 回 / ${run.potionsUsed} 個</span></div>
     <div class="btns row">
-      <button class="btn primary" id="btn-again">もう一度潜る</button>
-      <button class="btn" id="btn-to-title">タイトルへ</button>
+      <button class="btn primary" id="btn-to-hub">拠点へ戻る</button>
     </div>`;
   show('#result-screen');
-  $('#btn-again').onclick = () => { startRun(0); input.lockPointer(); };
-  $('#btn-to-title').onclick = showTitle;
+  $('#btn-to-hub').onclick = () => showHub(`${title}。${kept > 0 ? `魔石 ${kept} 個を持ち帰った。` : ''}`);
 }
 
 document.addEventListener('pointerlockchange', () => {
@@ -1171,7 +1335,7 @@ function step(dt) {
 }
 
 // ====================================================================== タイトル画面のボタン
-$('#btn-start').onclick = () => { startRun(0); input.lockPointer(); };
+$('#btn-start').onclick = () => showHub();
 $('#btn-quality').onclick = () => { toggleQuality(); showTitle(); };
 $('#btn-reset').onclick = () => {
   if (confirm('セーブデータ（吸収した精髄・魔石・記録）をすべて消去します。よろしいですか？')) {

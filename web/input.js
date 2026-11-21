@@ -3,11 +3,11 @@
 //   input.move      … {x, y} 移動（-1〜1。y が前）
 //   input.takeLook() … 視点の回転量 {yaw: 左右, pitch: 上下}（ラジアン。読むたびに 0 に戻る）
 //   input.dash      … ダッシュ中か
-//   input.consume('attack' | 'interact' | 'menu') … そのフレームに押されたか（押下を 1 回だけ返す）
+//   input.consume('attack' | 'interact' | 'menu' | 'potion' | 'skill0'〜'skill3') … そのフレームに押されたか（押下を 1 回だけ返す）
 //
 // PC: WASD/↑↓ 移動（A/D は横歩き）、マウスで視点（クリックでマウスをゲームに固定。ドラッグでも可）、Q/E/←→ で左右を向く、
-//     左クリック or J/Space 攻撃、Shift ダッシュ、F/Enter 調べる、Esc メニュー
-// タッチ: 左下の仮想スティックで移動、右側のドラッグで視点、ボタンで攻撃・ダッシュ・調べる
+//     左クリック or J/Space 攻撃、1〜4 スキル、R 回復薬、Shift ダッシュ、F/Enter 調べる、Esc メニュー
+// タッチ: 左下の仮想スティックで移動、右側のドラッグで視点、ボタンで攻撃・ダッシュ・調べる・スキル・回復薬
 export class Input {
   constructor(root) {
     this.root = root;
@@ -92,6 +92,9 @@ export class Input {
       if (e.code === 'KeyJ' || e.code === 'Space') { this.pressed.add('attack'); e.preventDefault(); }
       if (e.code === 'KeyF' || e.code === 'Enter') this.pressed.add('interact');
       if (e.code === 'Escape' || e.code === 'KeyP') this.pressed.add('menu');
+      if (e.code === 'KeyR') this.pressed.add('potion');
+      const digit = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(e.code);
+      if (digit >= 0) this.pressed.add('skill' + digit);
       if (e.code.startsWith('Arrow')) e.preventDefault();
       this.touchMode && this._setTouchMode(false);
     });
@@ -148,6 +151,8 @@ export class Input {
     btn('#btn-dash', 'dash');
     btn('#btn-interact', 'interact');
     btn('#btn-menu', 'menu');
+    btn('#btn-potion', 'potion');
+    for (let i = 0; i < 4; i++) btn('#btn-skill-' + i, 'skill' + i);
 
     const canvasLayer = el.querySelector('canvas');
     const onStart = e => {

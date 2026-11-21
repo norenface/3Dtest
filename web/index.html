@@ -57,6 +57,21 @@
   .popup.gain { color: var(--accent); font-size: 16px; }
   .ebar { position: absolute; width: 56px; height: 6px; transform: translate(-50%, -50%); background: rgba(0,0,0,.6); border-radius: 3px; overflow: hidden; }
   .ebar i { position: absolute; inset: 0 auto 0 0; background: #e05050; }
+  .popup.heal { color: #7dff9a; }
+  /* スキルバー（PC） */
+  #skillbar { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 8px; }
+  body.touch #skillbar { display: none; }
+  #skillbar .skill { position: relative; width: 74px; height: 58px; border-radius: 10px; overflow: hidden;
+    background: var(--panel); border: 2px solid var(--c, var(--line)); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #skillbar .skill.empty { opacity: .35; border-color: var(--line); }
+  #skillbar .skill.ready { box-shadow: 0 0 10px var(--c, transparent); }
+  #skillbar .skill.potion { --c: #7dff9a; }
+  #skillbar .key { position: absolute; left: 5px; top: 2px; font-size: 11px; color: var(--muted); }
+  #skillbar .name { font-size: 12px; font-weight: 700; }
+  #skillbar .count { font-size: 12px; color: #7dff9a; }
+  #skillbar .cd, .tbtn .cd { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: rgba(0,0,0,.6); pointer-events: none; }
+  #guard-indicator { position: absolute; left: 50%; top: 90px; transform: translateX(-50%); padding: 4px 12px; border-radius: 12px;
+    background: rgba(255, 179, 71, .25); border: 1px solid #ffb347; color: #ffd9a0; font-size: 13px; }
   #crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
     background: rgba(255,255,255,.8); box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
   #damage-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s;
@@ -77,6 +92,14 @@
   #btn-attack { right: max(28px, env(safe-area-inset-right)); bottom: 34px; width: 96px; height: 96px; font-size: 18px; }
   #btn-dash { right: calc(max(28px, env(safe-area-inset-right)) + 112px); bottom: 26px; width: 70px; height: 70px; font-size: 12px; white-space: nowrap; }
   #btn-interact { right: calc(max(28px, env(safe-area-inset-right)) + 14px); bottom: 146px; width: 66px; height: 66px; font-size: 13px; }
+  .tbtn.skill-btn { width: 58px; height: 58px; font-size: 13px; overflow: hidden; border-color: var(--c, rgba(255,255,255,.3)); }
+  .tbtn.skill-btn.ready { box-shadow: 0 0 10px var(--c, transparent); }
+  #btn-skill-0 { right: calc(max(28px, env(safe-area-inset-right)) + 200px); bottom: 30px; }
+  #btn-skill-1 { right: calc(max(28px, env(safe-area-inset-right)) + 190px); bottom: 104px; }
+  #btn-skill-2 { right: calc(max(28px, env(safe-area-inset-right)) + 120px); bottom: 150px; }
+  #btn-skill-3 { right: calc(max(28px, env(safe-area-inset-right)) + 260px); bottom: 150px; }
+  #btn-potion { right: calc(max(28px, env(safe-area-inset-right)) + 272px); bottom: 30px; width: 62px; height: 62px; font-size: 12px; border-color: #7dff9a; }
+  #btn-potion.empty { opacity: .35; }
   #btn-menu { top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 10px;
     margin-top: 64px; font-size: 18px; }
 
@@ -111,6 +134,33 @@
   .result-title.ok { color: var(--accent); }
   .result-title.ng { color: var(--danger); }
   .absorbed-list { margin-top: 8px; }
+  /* 拠点 */
+  .card.hub { width: min(680px, 100%); }
+  .hub-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .hub-wallet { text-align: right; font-size: 14px; }
+  .hub-wallet b { color: var(--gold); font-size: 20px; }
+  .hub-note { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: rgba(127,240,255,.08); border: 1px solid rgba(127,240,255,.25); font-size: 14px; }
+  .tabs { display: flex; gap: 6px; margin: 14px 0 10px; border-bottom: 1px solid var(--line); }
+  .tab { flex: 1; padding: 9px 6px; border: none; border-bottom: 3px solid transparent; background: none; font-size: 15px; color: var(--muted); }
+  .tab.on { color: var(--text); border-bottom-color: var(--gold); font-weight: 700; }
+  .tab-body { min-height: 180px; }
+  .tab-body h3 { font-size: 15px; margin: 14px 0 6px; }
+  .shop-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .shop-row .btn { min-width: 92px; padding: 8px 10px; font-size: 14px; line-height: 1.2; }
+  .btn.small { padding: 6px 10px; font-size: 12px; }
+  .slots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .slot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--line); font-size: 14px; }
+  .slot.on { border-style: solid; background: rgba(255,255,255,.04); }
+  .slot .slot-key { width: 20px; height: 20px; border-radius: 4px; background: rgba(255,255,255,.12); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+  .slot .mini { margin-left: auto; border: 1px solid var(--line); background: #232838; border-radius: 6px; padding: 2px 8px; }
+  .slot .mini + .mini { margin-left: 0; }
+  .essence-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .essence-row .grow { flex: 1; }
+  .orb-dot { width: 22px; height: 22px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; flex: none; }
+  .col-btns { display: flex; flex-direction: column; gap: 4px; }
+  .lore-text { padding: 12px 16px; border-radius: 10px; background: #e9dfc4; color: #3a2c18; margin-bottom: 12px;
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif; line-height: 1.9; }
+  .lore-text h3 { margin: 0 0 6px; }
   @media (max-height: 480px) {
     .card { padding: 14px 18px; }
     .btns { gap: 6px; margin-top: 10px; }
@@ -148,8 +198,10 @@
     <div id="popups"></div>
     <div id="prompt" class="hidden"></div>
     <div id="log"></div>
-    <div id="hint">WASD 移動（A D は横歩き）/ マウス 視点 / クリック・Space 攻撃<br>Shift ダッシュ / F 調べる / Esc メニュー</div>
+    <div id="hint">WASD 移動 / マウス 視点 / クリック 攻撃 / 1〜4 スキル<br>R 回復薬 / Shift ダッシュ / F 調べる / Esc メニュー</div>
     <div id="crosshair"></div>
+    <div id="skillbar"></div>
+    <div id="guard-indicator" class="hidden"></div>
     <div id="damage-flash"></div>
   </div>
 
@@ -160,6 +212,11 @@
     <button class="tbtn" id="btn-dash">ダッシュ</button>
     <button class="tbtn" id="btn-interact">調べる</button>
     <button class="tbtn" id="btn-menu">≡</button>
+    <button class="tbtn skill-btn hidden" id="btn-skill-0"><span></span><i class="cd"></i></button>
+    <button class="tbtn skill-btn hidden" id="btn-skill-1"><span></span><i class="cd"></i></button>
+    <button class="tbtn skill-btn hidden" id="btn-skill-2"><span></span><i class="cd"></i></button>
+    <button class="tbtn skill-btn hidden" id="btn-skill-3"><span></span><i class="cd"></i></button>
+    <button class="tbtn" id="btn-potion"><span>回復</span></button>
   </div>
 
   <!-- タイトル -->
@@ -169,7 +226,7 @@
       <div class="sub" id="game-subtitle"></div>
       <div id="title-status" class="muted"></div>
       <div class="btns">
-        <button class="btn primary" id="btn-start">迷宮に潜る</button>
+        <button class="btn primary" id="btn-start">はじめる（拠点へ）</button>
         <button class="btn" id="btn-quality"></button>
         <button class="btn danger" id="btn-reset">セーブデータを消去</button>
       </div>
@@ -184,6 +241,11 @@
   <!-- メニュー -->
   <div id="menu-screen" class="screen hidden">
     <div class="card" id="menu-card"></div>
+  </div>
+
+  <!-- 拠点 -->
+  <div id="hub-screen" class="screen hidden">
+    <div class="card hub" id="hub-card"></div>
   </div>
 
   <!-- 結果 -->

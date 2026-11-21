@@ -50,11 +50,22 @@ export const PASSIVES = {
   stone_skin: { name: '岩の皮膚', description: '受けるダメージ -15%。', damageTakenMultiplier: 0.85 },
 };
 
-// ------------------------------------------------------------------ アクティブスキル（発動は Step 2 で実装）
+// ------------------------------------------------------------------ アクティブスキル
+// type: melee（前方への強攻撃） / stun（周囲の敵を動けなくする） / guard（被ダメージ軽減の強化）
+export const MAX_SKILL_SLOTS = 4;
 export const ACTIVE_SKILLS = {
-  quick_stab: { name: '急所突き', description: '素早い突きで大ダメージを与える。', cooldown: 6 },
-  feral_howl: { name: '獣の咆哮', description: '周囲の敵を短時間ひるませる。', cooldown: 14 },
-  rock_guard: { name: '岩の構え', description: '数秒間、受けるダメージを大きく減らす。', cooldown: 18 },
+  quick_stab: {
+    name: '急所突き', short: '突き', description: '前方へ鋭く突き、通常攻撃の 2.4 倍のダメージを与える。',
+    type: 'melee', cooldown: 6, staminaCost: 10, damageMultiplier: 2.4, range: 3.2, arcDeg: 40, color: 0x7ad35a,
+  },
+  feral_howl: {
+    name: '獣の咆哮', short: '咆哮', description: '周囲 7m の敵を 2.5 秒間ひるませ、攻撃を中断させる。',
+    type: 'stun', cooldown: 14, staminaCost: 15, radius: 7, stunTime: 2.5, color: 0x7fb6ff,
+  },
+  rock_guard: {
+    name: '岩の構え', short: '岩', description: '6 秒間、受けるダメージを 65% 減らす。',
+    type: 'guard', cooldown: 18, staminaCost: 0, duration: 6, damageTakenMultiplier: 0.35, color: 0xffb347,
+  },
 };
 
 // ------------------------------------------------------------------ 精髄
@@ -155,21 +166,58 @@ export const FLOORS = [
   },
 ];
 
-// ------------------------------------------------------------------ 古文書（ゲーム内攻略メモ。閲覧・購入は Step 2 で実装）
+// ------------------------------------------------------------------ 古文書（ゲーム内攻略メモ）
+// price: 購入価格（ゴールド） / unlock: 条件を満たすと無料で読める（kills: 指定モンスターの累計撃破数）
 export const LORE = [
   { id: 'lore_capacity', title: '魂の器について', price: 30,
-    text: '器の容量には限りがある。安い精髄で器を埋めてしまった者は、深層で嘆くことになる。' },
-  { id: 'lore_golem', title: '石の巨人', price: 50,
-    text: '第1層の奥に棲む石の巨人は動きが鈍い。大振りの後の隙を狙え。その精髄は肉体を岩のように変える。' },
+    text: '器の容量には限りがある。安い精髄で器を埋めてしまった者は、深層で嘆くことになる。' +
+          '吸収した精髄は二度と魂から離れない。ただ一つ、忘却の霊薬を除いては。' },
   { id: 'lore_time', title: '崩れる回廊', price: 40,
-    text: '回廊は時が満ちると崩れはじめる。帰還の石碑の場所を先に確かめておくことだ。' },
+    text: '回廊は時が満ちると崩れはじめる。崩落に巻き込まれた者は、拾った魔石の半分を失って地上に放り出される。' +
+          '第1層の帰還の石碑は、入口から見て最も遠い南東の角にある。' },
+  { id: 'lore_goblin', title: '小鬼の精髄', price: 60, unlock: { kills: 'goblin', count: 5 },
+    text: '小鬼の精髄は器をほとんど使わない。器用さが増し、獲物から多くの魔石を剥ぎ取れるようになる。' +
+          '急所突きは、ひるんだ相手にこそ真価を発揮する。' },
+  { id: 'lore_wolf', title: '灰色の狼', price: 80, unlock: { kills: 'wolf', count: 3 },
+    text: '狼は飛びかかる直前に頭を低く下げる。その瞬間に横へ跳べ。' +
+          '狼の精髄は脚を軽くし、咆哮で群れを怯ませる力を与える。' },
+  { id: 'lore_golem', title: '石の巨人', price: 120, unlock: { kills: 'golem', count: 1 },
+    text: '第1層の奥に棲む石の巨人は動きが鈍い。腕を振り上げたら、すぐに間合いの外へ。大振りの後が好機だ。' +
+          'その精髄は肉体を岩のように変えるが、器を大きく占める。吸収する前に、器の残りをよく考えよ。' },
 ];
+
+// ------------------------------------------------------------------ 拠点（換金・商店）
+export const HUB = {
+  name: '冒険者の宿場',
+  stonePrice: 10,                 // 魔石 1 個の買取価格（ゴールド）
+  potion: { name: '回復薬', description: '最大 HP の 50% を回復する。迷宮で R キー／回復ボタン。', price: 30, heal: 0.5, max: 3, cooldown: 1.0 },
+  oblivion: { name: '忘却の霊薬', description: '吸収した精髄を 1 つ魂から取り除く。とても貴重。', price: 400 },
+  // 装備：level 0 が初期装備。購入すると次の段階へ強化される
+  weapons: [
+    { name: '鉄の大剣', price: 0, attackBonus: 0 },
+    { name: '鋼の大剣', price: 120, attackBonus: 6 },
+    { name: '業物の大剣', price: 320, attackBonus: 14 },
+  ],
+  armors: [
+    { name: '粗末な毛皮', price: 0, hpBonus: 0, damageTakenMultiplier: 1 },
+    { name: '革の鎧', price: 100, hpBonus: 20, damageTakenMultiplier: 0.92 },
+    { name: '鎖帷子', price: 280, hpBonus: 45, damageTakenMultiplier: 0.85 },
+  ],
+};
 
 // ------------------------------------------------------------------ 初期セーブデータ
 export const NEW_GAME = {
   race: 'barbarian',
-  stones: 0,          // 魔石（Step 2 で換金）
+  stones: 0,          // 魔石（拠点で換金する）
+  gold: 0,
   absorbed: [],       // 吸収済みの精髄 ID
+  skillSlots: [],     // セットしたスキル ID（最大 MAX_SKILL_SLOTS）
+  potions: 1,
+  oblivion: 0,        // 忘却の霊薬の所持数
+  weaponLevel: 0,
+  armorLevel: 0,
+  lore: [],           // 読めるようになった古文書 ID
+  kills: {},          // モンスター ID ごとの累計撃破数
   runs: 0,
   clears: 0,
 };
