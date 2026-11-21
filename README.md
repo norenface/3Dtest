@@ -6,7 +6,7 @@ Blender の GUI は使わず、Python スクリプトで形・マテリアルを
 ## 構成
 
 ```
-vendor/three/       … Three.js r170（同梱。CDN 不要）と一部のアドオン
+web/vendor/three/   … Three.js r170（同梱。CDN 不要）と一部のアドオン
 blender/
   bpy_kit.py         … 形を組む部品（箱・円柱・リング・チューブ・球）、マテリアル（単色・画像・写真素材の PBR）、
                         当たり判定と「調べる」対象の記録、glTF への書き出し、テクスチャの JPEG 化
