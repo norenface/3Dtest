@@ -1,11 +1,11 @@
 // 精髄の迷宮 — Step 1（MVP）
-// 3D ダンジョン・プレイヤーの移動と攻撃・敵 3 種・精髄のドロップと吸収・制限時間。
+// 3D ダンジョン（一人称視点）・プレイヤーの移動と攻撃・敵 3 種・精髄のドロップと吸収・制限時間。
 // ゲームバランスの数値はすべて data.js から読む。入力は input.js、保存は storage.js 経由。
 import * as THREE from 'three';
 import * as D from './data.js';
 import { Input } from './input.js';
 import * as Store from './storage.js';
-import { makeBarbarian, makeMonster, makeEssenceOrb, makeMagicStone, makeExitStone, flatMat } from './models.js';
+import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makeExitStone, flatMat } from './models.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -27,7 +27,16 @@ renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 120);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 120);
+camera.rotation.order = 'YXZ';   // 一人称視点：左右(yaw) → 上下(pitch)
+
+// 一人称の腕と武器は別のシーンに置き、ワールドの後に重ねて描く（壁にめり込んで見えないようにする）
+const vmScene = new THREE.Scene();
+const vmCamera = new THREE.PerspectiveCamera(70, 1, 0.01, 10);
+vmScene.add(new THREE.HemisphereLight(0x9aa6c8, 0x2a2018, 1.6));
+const vmLight = new THREE.PointLight(0xffc27a, 3, 4, 1.2);
+vmLight.position.set(-0.4, 0.3, 0.3);
+vmScene.add(vmLight);
 
 function applyQuality() {
   const high = settings.quality === 'high';
@@ -41,10 +50,11 @@ function applyQuality() {
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  camera.aspect = vmCamera.aspect = w / h;
   // 縦長の画面では視野を広げる
-  camera.fov = w < h ? 75 : 55;
+  camera.fov = vmCamera.fov = w < h ? 85 : 70;
   camera.updateProjectionMatrix();
+  vmCamera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
 
@@ -183,6 +193,23 @@ function buildFloor(floorDef) {
   root.add(wallMesh);
   world.wallMesh = wallMesh;
 
+  // 天井（一人称視点では見上げると見える）
+  const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), flatMat(0xffffff, { roughness: 1 }), floorCells.length);
+  floorCells.forEach(([r, c], i) => {
+    tmp.position.set(c * T, D.WALL_HEIGHT + 0.15, r * T); tmp.updateMatrix();
+    ceil.setMatrixAt(i, tmp.matrix);
+    const v = 0.16 + rnd() * 0.04;
+    ceil.setColorAt(i, col.setRGB(v, v * 0.97, v * 0.93));
+  });
+  ceil.receiveShadow = true;
+  root.add(ceil);
+  // 天井の梁（4m ごと）
+  const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.35, 0.35), flatMat(0x3a2c20), floorCells.length);
+  floorCells.forEach(([r, c], i) => {
+    tmp.position.set(c * T, D.WALL_HEIGHT - 0.15, r * T - T / 2); tmp.updateMatrix(); beams.setMatrixAt(i, tmp.matrix);
+  });
+  root.add(beams);
+
   // 壁の上端の縁取り（輪郭をわかりやすくする）
   const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(0x77705f), wallCells.length);
   wallCells.forEach(([r, c], i) => {
@@ -254,8 +281,7 @@ function buildFloor(floorDef) {
   player.pos.copy(sp);
   player.facing = Math.PI;  // 開始時は +Z 方向（ダンジョンの奥）を向く
   camState.yaw = player.facing;
-  player.model.group.position.copy(sp);
-  root.add(player.model.group);
+  camState.pitch = -0.08;
 
   // プレイヤーの松明（影を落とす唯一の光源）
   const torch = new THREE.PointLight(0xffc27a, 16, 18, 1.5);
@@ -277,7 +303,7 @@ const player = {
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), facing: 0,
   hp: 1, stamina: 1, attackTimer: 0, attackCooldown: 0, hitDone: false,
   flinch: 0, invuln: 0, staminaDelay: 0, walkPhase: 0, dead: false,
-  model: makeBarbarian(D.RACES.barbarian.color),
+  viewmodel: makeViewmodel(D.RACES.barbarian.color),
   st: null,
 };
 
@@ -485,14 +511,6 @@ function playerAttack() {
   player.attackTimer = 0.32;
   player.attackCooldown = F.attackCooldown;
   player.hitDone = false;
-  // 近くの敵に自動で向き直る（タッチ操作でも狙いやすくする）
-  let best = null, bestD = 4;
-  for (const m of world.monsters) {
-    if (m.state === 'dead') continue;
-    const d = m.pos.distanceTo(player.pos);
-    if (d < bestD) { best = m; bestD = d; }
-  }
-  if (best) player.facing = Math.atan2(-(best.pos.x - player.pos.x), -(best.pos.z - player.pos.z));
 }
 
 function resolvePlayerHit() {
@@ -572,6 +590,7 @@ function hurtPlayer(dmg, fromX, fromZ) {
   popup(p, String(dmg), 'hurt');
   burst(new THREE.Vector3(player.pos.x, 1.2, player.pos.z), 0xff8a7a, 10, 3, 2);
   damageFlash();
+  camState.shake = 0.35;
   world.run.damageTaken += dmg;
   if (player.hp <= 0) {
     player.hp = 0;
@@ -581,15 +600,18 @@ function hurtPlayer(dmg, fromX, fromZ) {
 }
 
 // ====================================================================== 更新
-const camState = { yaw: 0, dist: 5.8, height: 6.8, target: new THREE.Vector3() };
-const raycaster = new THREE.Raycaster();
+// 一人称カメラ：yaw（左右）・pitch（上下）・歩行の揺れ・被弾の揺れ
+const camState = { yaw: 0, pitch: 0, bob: 0, shake: 0, eye: 1.65 };
 
 function updatePlayer(dt) {
   const st = player.st;
   player.attackCooldown = Math.max(0, player.attackCooldown - dt);
   player.invuln = Math.max(0, player.invuln - dt);
   player.flinch = Math.max(0, player.flinch - dt);
-  camState.yaw += input.takeLook();
+  const look = input.takeLook();
+  camState.yaw += look.yaw;
+  camState.pitch = THREE.MathUtils.clamp(camState.pitch + look.pitch, -1.2, 1.2);
+  player.facing = camState.yaw;   // 一人称なので体の向き = 視線の向き
 
   if (input.consume('attack') && !player.dead) playerAttack();
 
@@ -614,13 +636,7 @@ function updatePlayer(dt) {
     const len = Math.hypot(dx, dz);
     player.pos.x += dx / len * speed * dt;
     player.pos.z += dz / len * speed * dt;
-    if (player.attackTimer <= 0) {
-      const target = Math.atan2(-dx, -dz);
-      let diff = target - player.facing;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      player.facing += diff * Math.min(1, dt * 14);
-    }
-    player.walkPhase += dt * speed * 2.2;
+    player.walkPhase += dt * speed * 1.9;
   }
   player.pos.x += player.vel.x * dt;
   player.pos.z += player.vel.z * dt;
@@ -638,30 +654,36 @@ function updatePlayer(dt) {
     if (!player.hitDone && player.attackTimer < 0.18) { player.hitDone = true; resolvePlayerHit(); }
   }
 
-  // 見た目
-  const g = player.model.group, P = player.model.parts;
-  g.position.copy(player.pos);
-  g.rotation.y = player.facing;
-  const swing = moving ? Math.sin(player.walkPhase) * (dashing ? 0.9 : 0.6) : 0;
-  P.legL.rotation.x = swing; P.legR.rotation.x = -swing;
-  P.armL.rotation.x = -swing * 0.8;
+  // 一人称の腕と大剣
+  const vm = player.viewmodel, V = vm.parts;
+  const bobX = moving ? Math.cos(player.walkPhase) * 0.025 : 0;
+  const bobY = moving ? -Math.abs(Math.sin(player.walkPhase)) * 0.03 : Math.sin(world.clock * 1.6) * 0.006;
+  vm.group.position.set(0.42 + bobX, -0.42 + bobY, -0.62);
   if (player.attackTimer > 0) {
-    const t = 1 - player.attackTimer / 0.32;       // 0 → 1
-    P.armR.rotation.x = t < 0.35 ? -2.6 * (t / 0.35) : -2.6 + 3.4 * ((t - 0.35) / 0.65);
-    P.body.rotation.y = t < 0.35 ? 0.3 : -0.3;
+    const t = 1 - player.attackTimer / 0.32;          // 0 → 1
+    if (t < 0.3) {                                     // 振りかぶる（右上へ）
+      const k = t / 0.3;
+      V.swing.rotation.set(0.5 * k, 0, -0.5 * k);
+      V.swing.position.set(0.08 * k, 0.12 * k, 0.05 * k);
+    } else {                                           // 振り下ろす（左下へ斜めに）
+      const k = Math.min(1, (t - 0.3) / 0.45);
+      V.swing.rotation.set(0.5 - 1.9 * k, 0.5 * k, -0.5 + 1.6 * k);
+      V.swing.position.set(0.08 - 0.42 * k, 0.12 - 0.2 * k, 0.05 - 0.15 * k);
+    }
   } else {
-    P.armR.rotation.x += (swing * 0.6 - 0.3 - P.armR.rotation.x) * Math.min(1, dt * 10);
-    P.body.rotation.y *= 0.8;
+    V.swing.rotation.x += (0 - V.swing.rotation.x) * Math.min(1, dt * 12);
+    V.swing.rotation.y += (0 - V.swing.rotation.y) * Math.min(1, dt * 12);
+    V.swing.rotation.z += (0 - V.swing.rotation.z) * Math.min(1, dt * 12);
+    V.swing.position.multiplyScalar(Math.max(0, 1 - dt * 12));
   }
-  P.body.position.y = moving ? Math.abs(Math.sin(player.walkPhase)) * 0.06 : 0;
-  P.body.rotation.z = player.flinch > 0 ? Math.sin(world.clock * 40) * 0.06 : 0;
-  if (player.dead) { g.rotation.x = Math.min(Math.PI / 2, g.rotation.x + dt * 3); }
-  // 無敵時間中は点滅
-  g.visible = !(player.invuln > 0 && Math.floor(world.clock * 20) % 2 === 0) || player.dead;
+  vm.group.visible = !player.dead;
+  camState.bob = moving ? Math.abs(Math.sin(player.walkPhase)) * (dashing ? 0.07 : 0.045) : 0;
 
-  // 松明はカメラ寄り（主人公の斜め後ろ上）に置き、画面に見えている側を照らす
-  world.torch.position.set(player.pos.x + Math.sin(camState.yaw) * 1.6, 3.4, player.pos.z + Math.cos(camState.yaw) * 1.6);
-  world.torch.intensity = 16 + Math.sin(world.clock * 13) * 1.2 + Math.sin(world.clock * 7.3) * 1.0;
+  // 松明は左手に持っている想定（目の少し左下）
+  const lx = Math.cos(camState.yaw), lz = -Math.sin(camState.yaw);
+  world.torch.position.set(player.pos.x - lx * 0.4, 1.9, player.pos.z - lz * 0.4);
+  world.torch.intensity = 14 + Math.sin(world.clock * 13) * 1.0 + Math.sin(world.clock * 7.3) * 0.8;
+  vmLight.intensity = 3 + Math.sin(world.clock * 13) * 0.3;
 }
 
 function updateMonsters(dt) {
@@ -853,30 +875,18 @@ function nearestInteractable() {
   return best;
 }
 
-// 迷宮には天井がないので、壁に遮られるときはカメラを寄せるのではなく「持ち上げて」見下ろす角度にする
-const CAM_TRIES = [[1, 0], [0.9, 2.5], [0.75, 5], [0.55, 8], [0.35, 11]]; // [水平距離の倍率, 追加の高さ]
-function cameraBlocked(target, pos) {
-  if (!world.wallMesh) return false;
-  const dir = pos.clone().sub(target);
-  const len = dir.length();
-  raycaster.set(target, dir.normalize());
-  raycaster.far = len;
-  return raycaster.intersectObject(world.wallMesh, false).length > 0;
-}
 function updateCamera(dt) {
-  const target = camState.target;
-  target.lerp(new THREE.Vector3(player.pos.x, 1.2, player.pos.z), Math.min(1, dt * 10));
-  const sin = Math.sin(camState.yaw), cos = Math.cos(camState.yaw);
-  let want = null;
-  for (const [k, up] of CAM_TRIES) {
-    want = new THREE.Vector3(target.x + sin * camState.dist * k, target.y + camState.height + up, target.z + cos * camState.dist * k);
-    if (!cameraBlocked(target, want)) break;
-  }
-  // 急に跳ばないよう、なめらかに追従させる
-  if (!camState.pos) camState.pos = want.clone();
-  camState.pos.lerp(want, Math.min(1, dt * 6));
-  camera.position.copy(camState.pos);
-  camera.lookAt(target);
+  // 力尽きたら視点が床に崩れ落ちる
+  const targetEye = player.dead ? 0.35 : camState.eye;
+  camState.eyeNow = camState.eyeNow ?? targetEye;
+  camState.eyeNow += (targetEye - camState.eyeNow) * Math.min(1, dt * (player.dead ? 3 : 12));
+  camState.shake = Math.max(0, camState.shake - dt);
+  const sh = camState.shake * 0.25;
+  camera.position.set(
+    player.pos.x + (Math.random() - 0.5) * sh,
+    camState.eyeNow + camState.bob + (Math.random() - 0.5) * sh,
+    player.pos.z + (Math.random() - 0.5) * sh);
+  camera.rotation.set(camState.pitch, camState.yaw, player.dead ? 0.5 : 0);
 }
 
 // ====================================================================== HUD
@@ -957,13 +967,11 @@ function startRun(floorIndex = 0) {
   player.dead = false;
   player.vel.set(0, 0, 0);
   player.attackTimer = player.attackCooldown = player.flinch = player.invuln = 0;
-  player.model.group.rotation.set(0, 0, 0);
-  player.model.group.visible = true;
+  camState.eyeNow = camState.eye;
+  camState.shake = 0;
   refreshStats(false);
   buildFloor(floorDef);
   world.timeLeft = floorDef.timeLimit;
-  camState.target.set(player.pos.x, 1.2, player.pos.z);
-  camState.pos = null;
   $('#floor-name').textContent = floorDef.name;
   $('#log').innerHTML = '';
   $('#hud').classList.remove('hidden');
@@ -977,6 +985,7 @@ function startRun(floorIndex = 0) {
 
 function openAbsorb(orb) {
   world.state = 'absorb';
+  releasePointer();
   input.enabled = false;
   input.clear();
   const e = D.ESSENCES[orb.id];
@@ -1037,10 +1046,12 @@ function closeModal() {
   world.state = 'playing';
   input.clear();
   input.enabled = true;
+  input.lockPointer();
 }
 
 function openMenu() {
   world.state = 'menu';
+  releasePointer();
   input.enabled = false;
   input.clear();
   $('#menu-card').innerHTML = `
@@ -1066,6 +1077,7 @@ function toggleQuality() {
 function endRun(reason) {
   if (world.state === 'result') return;
   world.state = 'result';
+  releasePointer();
   input.enabled = false;
   input.clear();
   const run = world.run;
@@ -1097,8 +1109,16 @@ function endRun(reason) {
       <button class="btn" id="btn-to-title">タイトルへ</button>
     </div>`;
   show('#result-screen');
-  $('#btn-again').onclick = () => startRun(0);
+  $('#btn-again').onclick = () => { startRun(0); input.lockPointer(); };
   $('#btn-to-title').onclick = showTitle;
+}
+
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement && world.state === 'playing' && !player.dead) openMenu();
+});
+// 結果・メニュー画面ではマウスの固定を外す
+function releasePointer() {
+  if (document.pointerLockElement) document.exitPointerLock();
 }
 
 // ====================================================================== メインループ
@@ -1107,7 +1127,13 @@ function frame(now) {
   const rawDt = Math.min(0.05, (now - last) / 1000);
   last = now;
   step(rawDt);
+  renderer.autoClear = true;
   renderer.render(scene, camera);
+  if (world.state === 'playing' && player.viewmodel.group.visible) {
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(vmScene, vmCamera);
+  }
   requestAnimationFrame(frame);
 }
 
@@ -1117,6 +1143,7 @@ function step(dt) {
     // タイトルの背景：ダンジョンの入口をゆっくり見回す
     world.clock += dt;
     camState.yaw += dt * 0.12;
+    camState.pitch = -0.05;
     updatePickups(dt);
     updateCamera(dt);
     return;
@@ -1144,7 +1171,7 @@ function step(dt) {
 }
 
 // ====================================================================== タイトル画面のボタン
-$('#btn-start').onclick = () => startRun(0);
+$('#btn-start').onclick = () => { startRun(0); input.lockPointer(); };
 $('#btn-quality').onclick = () => { toggleQuality(); showTitle(); };
 $('#btn-reset').onclick = () => {
   if (confirm('セーブデータ（吸収した精髄・魔石・記録）をすべて消去します。よろしいですか？')) {
@@ -1157,7 +1184,7 @@ $('#btn-reset').onclick = () => {
 resize();
 player.st = computeStats();
 buildFloor(D.FLOORS[0]);  // タイトルの背景として第 1 層を表示する
-camState.target.set(player.pos.x, 1.2, player.pos.z);
+vmScene.add(player.viewmodel.group);
 applyQuality();
 showTitle();
 requestAnimationFrame(frame);
@@ -1169,6 +1196,8 @@ window.game = {
   get state() { return world.state; },
   startRun, endRun, openMenu, closeModal,
   teleport(x, z) { player.pos.set(x, 0, z); },
+  face(x, z) { camState.yaw = Math.atan2(-(x - player.pos.x), -(z - player.pos.z)); camState.pitch = -0.1; },
+  get cam() { return camState; },
   tile(r, c) { return cellCenter(r, c); },
   setTime(t) { world.timeLeft = t; },
   forceDrops(on = true) { world.forceDrops = on; },

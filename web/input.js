@@ -1,24 +1,27 @@
 // 入力の抽象化。ゲームロジックはキーやタッチを直接見ず、ここが作る「操作の状態」だけを読む。
 //
 //   input.move      … {x, y} 移動（-1〜1。y が前）
-//   input.lookDelta … カメラの左右回転量（ラジアン。読むたびに 0 に戻る）
+//   input.takeLook() … 視点の回転量 {yaw: 左右, pitch: 上下}（ラジアン。読むたびに 0 に戻る）
 //   input.dash      … ダッシュ中か
 //   input.consume('attack' | 'interact' | 'menu') … そのフレームに押されたか（押下を 1 回だけ返す）
 //
-// PC: WASD/↑↓ 移動、マウスドラッグ or Q/E/←→ でカメラ、左クリック or J/Space 攻撃、Shift ダッシュ、F/Enter 調べる、Esc メニュー
-// タッチ: 左下の仮想スティックで移動、右側のドラッグでカメラ、ボタンで攻撃・ダッシュ・調べる
+// PC: WASD/↑↓ 移動（A/D は横歩き）、マウスで視点（クリックでマウスをゲームに固定。ドラッグでも可）、Q/E/←→ で左右を向く、
+//     左クリック or J/Space 攻撃、Shift ダッシュ、F/Enter 調べる、Esc メニュー
+// タッチ: 左下の仮想スティックで移動、右側のドラッグで視点、ボタンで攻撃・ダッシュ・調べる
 export class Input {
   constructor(root) {
     this.root = root;
     this.move = { x: 0, y: 0 };
-    this.lookDelta = 0;
+    this.lookDelta = 0;   // 左右
+    this.lookDeltaY = 0;  // 上下
     this.dash = false;
     this.enabled = true;
+    this.mouseSensitivity = 0.0025;
     this.keys = new Set();
     this.pressed = new Set();
     this.touchMode = false;
     this.stick = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
-    this.lookTouch = { id: null, x: 0 };
+    this.lookTouch = { id: null, x: 0, y: 0 };
     this.dashTouch = false;
     this.mouseDrag = null;
     this._bindKeyboard();
@@ -33,9 +36,21 @@ export class Input {
   }
 
   takeLook() {
-    const d = this.lookDelta;
+    const d = { yaw: this.lookDelta, pitch: this.lookDeltaY };
     this.lookDelta = 0;
+    this.lookDeltaY = 0;
     return d;
+  }
+
+  // マウスをゲームに固定する（PC の一人称視点用。クリックなどの操作の中から呼ぶ必要がある）
+  lockPointer() {
+    if (this.touchMode || document.pointerLockElement) return;
+    const canvas = this.root.querySelector('canvas');
+    try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* 対応していない環境では何もしない */ }
+  }
+
+  get pointerLocked() {
+    return !!document.pointerLockElement;
   }
 
   clear() {
@@ -43,6 +58,7 @@ export class Input {
     this.pressed.clear();
     this.move.x = this.move.y = 0;
     this.lookDelta = 0;
+    this.lookDeltaY = 0;
     this.dash = false;
     this.dashTouch = false;
     this.stick.id = null;
@@ -83,18 +99,28 @@ export class Input {
     addEventListener('blur', () => this.clear());
   }
 
-  // ---------------------------------------------------------------- マウス（ドラッグでカメラ、クリックで攻撃）
+  // ---------------------------------------------------------------- マウス
+  // マウスがゲームに固定されていれば動かすだけで視点が回る。固定されていないときはドラッグで回す
   _bindMouse() {
     const canvas = this.root.querySelector('canvas');
     canvas.addEventListener('mousedown', e => {
       if (!this.enabled) return;
       if (e.button === 0) this.pressed.add('attack');
-      this.mouseDrag = { x: e.clientX };
+      this.lockPointer();
+      this.mouseDrag = { x: e.clientX, y: e.clientY };
     });
     addEventListener('mousemove', e => {
-      if (!this.mouseDrag || !this.enabled) return;
-      this.lookDelta -= (e.clientX - this.mouseDrag.x) * 0.006;
+      if (!this.enabled) return;
+      if (this.pointerLocked) {
+        this.lookDelta -= e.movementX * this.mouseSensitivity;
+        this.lookDeltaY -= e.movementY * this.mouseSensitivity;
+        return;
+      }
+      if (!this.mouseDrag) return;
+      this.lookDelta -= (e.clientX - this.mouseDrag.x) * this.mouseSensitivity * 1.6;
+      this.lookDeltaY -= (e.clientY - this.mouseDrag.y) * this.mouseSensitivity * 1.6;
       this.mouseDrag.x = e.clientX;
+      this.mouseDrag.y = e.clientY;
     });
     addEventListener('mouseup', () => { this.mouseDrag = null; });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -136,6 +162,7 @@ export class Input {
         } else if (this.lookTouch.id === null) {
           this.lookTouch.id = t.identifier;
           this.lookTouch.x = t.clientX;
+          this.lookTouch.y = t.clientY;
         }
       }
       e.preventDefault();
@@ -152,8 +179,10 @@ export class Input {
           this.move.y = -this.stick.y;
           this._updateStickView();
         } else if (t.identifier === this.lookTouch.id) {
-          this.lookDelta -= (t.clientX - this.lookTouch.x) * 0.008;
+          this.lookDelta -= (t.clientX - this.lookTouch.x) * 0.006;
+          this.lookDeltaY -= (t.clientY - this.lookTouch.y) * 0.006;
           this.lookTouch.x = t.clientX;
+          this.lookTouch.y = t.clientY;
         }
       }
       e.preventDefault();

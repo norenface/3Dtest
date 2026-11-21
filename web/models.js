@@ -195,3 +195,42 @@ export function makeExitStone() {
   light.position.y = 2.2; g.add(light);
   return { group: g, parts: { ring, rune, light } };
 }
+
+// ------------------------------------------------------------------ 一人称視点の腕と武器（ビューモデル）
+// カメラ空間に置く（原点 = 目、-Z が前）。swing を回すと振り下ろしになる。
+export function makeViewmodel(colors) {
+  const root = new THREE.Group();
+  const swing = new THREE.Object3D();   // 攻撃で回す
+  root.add(swing);
+  // 右腕（画面右下から前へ伸びる）
+  const arm = box(0.11, 0.11, 0.5, colors.skin);
+  arm.position.set(0, 0, 0.1);
+  swing.add(arm);
+  const bracer = box(0.14, 0.14, 0.16, 0x4a3320);
+  bracer.position.set(0, 0, -0.1);
+  swing.add(bracer);
+  const fist = box(0.12, 0.12, 0.12, colors.skin);
+  fist.position.set(0, 0, -0.22);
+  swing.add(fist);
+  // 大剣（拳から上前方へ）
+  const sword = new THREE.Object3D();
+  sword.position.set(0, 0.02, -0.22);
+  sword.rotation.x = 0.9;          // 刃先を斜め上・前に向ける
+  swing.add(sword);
+  const grip = cyl(0.035, 0.035, 0.32, 0x4a3320);
+  sword.add(grip);
+  const guard = box(0.36, 0.06, 0.08, 0x6d6d6d, { metalness: 0.6, roughness: 0.4 });
+  guard.position.y = 0.18;
+  sword.add(guard);
+  // 環境マップがないので金属度は低めにして、明るい鋼色に見せる
+  const blade = box(0.1, 0.95, 0.03, 0xc9d1d9, { metalness: 0.25, roughness: 0.35 });
+  blade.position.y = 0.66;
+  sword.add(blade);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.18, 4), flatMat(0xc9d1d9, { metalness: 0.25, roughness: 0.35 }));
+  tip.position.y = 1.22;
+  tip.rotation.y = Math.PI / 4;
+  tip.scale.z = 0.3;
+  sword.add(tip);
+  root.traverse(o => { if (o.isMesh) o.castShadow = false; });
+  return { group: root, parts: { swing, sword } };
+}
