@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#07080c">
+<title>精髄の迷宮</title>
+<style>
+  :root {
+    --bg: #07080c; --panel: rgba(12, 14, 22, 0.82); --line: rgba(255, 255, 255, 0.12);
+    --text: #e9e4d8; --muted: #a29b8c; --gold: #e8c46a; --hp: #d9534f; --st: #5cb85c; --accent: #7ff0ff;
+    --danger: #ff6b5b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", "Noto Sans JP", "Noto Sans CJK JP", sans-serif;
+    user-select: none; -webkit-user-select: none; touch-action: none; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .hidden { display: none !important; }
+
+  /* ---------------------------------------------------------------- HUD */
+  #hud { position: absolute; inset: 0; pointer-events: none; }
+  #hud .top { position: absolute; top: max(10px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right)); display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .bars { width: min(260px, 34vw); padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .bar { position: relative; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.1); overflow: hidden; margin: 4px 0; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; width: 100%; border-radius: 6px; transition: width .12s; }
+  #hp-bar > i { background: linear-gradient(90deg, #a83232, var(--hp)); }
+  #st-bar > i { background: linear-gradient(90deg, #3d8b3d, var(--st)); }
+  .bar-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+  .center-info { text-align: center; padding: 6px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  #floor-name { font-size: 12px; color: var(--muted); }
+  #timer { font-size: 26px; font-weight: 700; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+  #timer.warn { color: var(--danger); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .right-info { padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; text-align: right; min-width: 120px; }
+  .right-info b { color: var(--gold); }
+  #capacity-pips { display: flex; gap: 3px; justify-content: flex-end; margin-top: 4px; }
+  #capacity-pips i { width: 12px; height: 8px; border-radius: 2px; background: rgba(255,255,255,0.15); }
+  #capacity-pips i.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  #prompt { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); padding: 8px 16px; border-radius: 20px;
+    background: rgba(0,0,0,.7); border: 1px solid var(--line); font-size: 15px; white-space: nowrap; }
+  #prompt kbd { display: inline-block; padding: 0 7px; margin-right: 6px; border-radius: 4px; background: #fff; color: #000; font-family: inherit; }
+  body.touch #prompt kbd { display: none; }
+  #log { position: absolute; left: max(12px, env(safe-area-inset-left)); bottom: 18px; width: min(360px, 60vw); font-size: 13px; }
+  #log div { margin-top: 4px; padding: 3px 8px; background: rgba(0,0,0,.55); border-radius: 6px; animation: fadeout 5s forwards; }
+  @keyframes fadeout { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+  body.touch #log { bottom: auto; top: 110px; width: min(300px, 45vw); }
+  #hint { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted); text-align: right; line-height: 1.6; }
+  body.touch #hint { display: none; }
+  #popups, #enemy-bars { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .popup { position: absolute; font-weight: 800; font-size: 20px; color: #fff; text-shadow: 0 2px 0 #000, 0 0 6px #000; transform: translate(-50%, -50%); }
+  .popup.crit { color: #ffd84a; font-size: 26px; }
+  .popup.hurt { color: var(--danger); }
+  .popup.gain { color: var(--accent); font-size: 16px; }
+  .ebar { position: absolute; width: 56px; height: 6px; transform: translate(-50%, -50%); background: rgba(0,0,0,.6); border-radius: 3px; overflow: hidden; }
+  .ebar i { position: absolute; inset: 0 auto 0 0; background: #e05050; }
+  #damage-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s;
+    box-shadow: inset 0 0 120px 40px rgba(200, 20, 20, .8); }
+  #damage-flash.on { opacity: 1; transition: none; }
+
+  /* ---------------------------------------------------------------- タッチ操作 */
+  #touch-ui { display: none; }
+  body.touch #touch-ui { display: block; }
+  #stick { position: absolute; width: 130px; height: 130px; margin: -65px 0 0 -65px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.25); background: rgba(255,255,255,.06); opacity: 0; pointer-events: none; }
+  #stick.active { opacity: 1; }
+  #stick-knob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; border-radius: 50%; background: rgba(255,255,255,.35); transform: translate(-50%, -50%); }
+  #stick-guide { position: absolute; left: max(40px, env(safe-area-inset-left)); bottom: 40px; font-size: 12px; color: rgba(255,255,255,.35); pointer-events: none; }
+  .tbtn { position: absolute; border-radius: 50%; border: 2px solid rgba(255,255,255,.3); background: rgba(20,22,30,.55);
+    color: #fff; font-weight: 700; pointer-events: auto; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.1; }
+  .tbtn.down { background: rgba(127, 240, 255, .35); }
+  #btn-attack { right: max(28px, env(safe-area-inset-right)); bottom: 34px; width: 96px; height: 96px; font-size: 18px; }
+  #btn-dash { right: calc(max(28px, env(safe-area-inset-right)) + 112px); bottom: 26px; width: 70px; height: 70px; font-size: 12px; white-space: nowrap; }
+  #btn-interact { right: calc(max(28px, env(safe-area-inset-right)) + 14px); bottom: 146px; width: 66px; height: 66px; font-size: 13px; }
+  #btn-menu { top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: 40px; height: 40px; border-radius: 10px;
+    margin-top: 64px; font-size: 18px; }
+
+  /* ---------------------------------------------------------------- 画面（タイトル・モーダル・結果） */
+  .screen { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: radial-gradient(ellipse at center, rgba(20,24,36,.75), rgba(4,5,8,.95)); overflow: auto; }
+  .card { width: min(520px, 100%); max-height: 100%; overflow: auto; padding: 22px 24px; border-radius: 16px;
+    background: rgba(16, 18, 28, .95); border: 1px solid var(--line); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+  .card h1 { margin: 0; font-size: clamp(28px, 6vw, 44px); letter-spacing: 4px; text-align: center;
+    background: linear-gradient(180deg, #fff3c9, #c99a3a); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .card h2 { margin: 0 0 12px; font-size: 20px; }
+  .sub { text-align: center; color: var(--muted); letter-spacing: 6px; font-size: 12px; margin: 4px 0 18px; }
+  .btns { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  .btns.row { flex-direction: row; }
+  .btns.row > * { flex: 1; }
+  .btn { padding: 12px 16px; border-radius: 10px; border: 1px solid var(--line); background: #232838; font-size: 16px; }
+  .btn.primary { background: linear-gradient(180deg, #c99a3a, #8a6420); border-color: #e8c46a; color: #1a1206; font-weight: 700; }
+  .btn.danger { background: #3a1d1d; border-color: #7a3030; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn:not(:disabled):active { transform: translateY(1px); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0; }
+  .stats div { padding: 6px 8px; background: rgba(255,255,255,.05); border-radius: 8px; font-size: 13px; display: flex; justify-content: space-between; }
+  .stats b { color: var(--gold); }
+  .stats .up { color: var(--st); }
+  .tag { display: inline-block; padding: 2px 8px; margin: 2px; border-radius: 10px; font-size: 12px; background: rgba(127,240,255,.12); border: 1px solid rgba(127,240,255,.3); }
+  .essence-head { display: flex; align-items: center; gap: 14px; }
+  .orb-icon { width: 46px; height: 46px; border-radius: 50%; flex: none; box-shadow: 0 0 18px currentColor; background: currentColor; }
+  .kv { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .warn-text { color: var(--danger); font-size: 14px; margin-top: 10px; }
+  .result-title { text-align: center; font-size: 26px; font-weight: 800; margin-bottom: 8px; }
+  .result-title.ok { color: var(--accent); }
+  .result-title.ng { color: var(--danger); }
+  .absorbed-list { margin-top: 8px; }
+  @media (max-height: 480px) {
+    .card { padding: 14px 18px; }
+    .btns { gap: 6px; margin-top: 10px; }
+    .btn { padding: 9px 14px; font-size: 15px; }
+    #timer { font-size: 20px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<div id="app">
+  <canvas id="view"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="top">
+      <div class="bars">
+        <div class="bar-label"><span>HP</span><span id="hp-text">0 / 0</span></div>
+        <div class="bar" id="hp-bar"><i></i></div>
+        <div class="bar-label"><span>スタミナ</span><span id="st-text"></span></div>
+        <div class="bar" id="st-bar"><i></i></div>
+      </div>
+      <div class="center-info">
+        <div id="floor-name"></div>
+        <div id="timer">0:00</div>
+      </div>
+      <div class="right-info">
+        <div>魔石 <b id="stones">0</b></div>
+        <div class="muted">魂の器 <span id="capacity-text"></span></div>
+        <div id="capacity-pips"></div>
+      </div>
+    </div>
+    <div id="enemy-bars"></div>
+    <div id="popups"></div>
+    <div id="prompt" class="hidden"></div>
+    <div id="log"></div>
+    <div id="hint">WASD 移動 / マウスドラッグ・Q E 視点 / クリック・Space 攻撃<br>Shift ダッシュ / F 調べる / Esc メニュー</div>
+    <div id="damage-flash"></div>
+  </div>
+
+  <div id="touch-ui">
+    <div id="stick"><div id="stick-knob"></div></div>
+    <div id="stick-guide">← 左側をなぞって移動 ／ 右側をなぞって視点 →</div>
+    <button class="tbtn" id="btn-attack">攻撃</button>
+    <button class="tbtn" id="btn-dash">ダッシュ</button>
+    <button class="tbtn" id="btn-interact">調べる</button>
+    <button class="tbtn" id="btn-menu">≡</button>
+  </div>
+
+  <!-- タイトル -->
+  <div id="title-screen" class="screen">
+    <div class="card">
+      <h1 id="game-title"></h1>
+      <div class="sub" id="game-subtitle"></div>
+      <div id="title-status" class="muted"></div>
+      <div class="btns">
+        <button class="btn primary" id="btn-start">迷宮に潜る</button>
+        <button class="btn" id="btn-quality"></button>
+        <button class="btn danger" id="btn-reset">セーブデータを消去</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 精髄の吸収 -->
+  <div id="absorb-screen" class="screen hidden">
+    <div class="card" id="absorb-card"></div>
+  </div>
+
+  <!-- メニュー -->
+  <div id="menu-screen" class="screen hidden">
+    <div class="card" id="menu-card"></div>
+  </div>
+
+  <!-- 結果 -->
+  <div id="result-screen" class="screen hidden">
+    <div class="card" id="result-card"></div>
+  </div>
+
+  <div id="loading" class="screen"><div class="muted">読み込み中…</div></div>
+</div>
+<script type="module" src="./game.js"></script>
+</body>
+</html>
