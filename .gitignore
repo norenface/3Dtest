@@ -1,0 +1,10 @@
+__pycache__/
+node_modules/
+.venv/
+
+# Poly Haven からダウンロードした素材（fetch_textures.py で取り直せる）
+blender/cache/
+
+# Blender の編集用ファイルはビルドで生成する（大きくなるのでコミットしない）
+*.blend
+*.blend1
