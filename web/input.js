@@ -27,6 +27,7 @@ export class Input {
     this._bindKeyboard();
     this._bindMouse();
     this._bindTouch();
+    this._bindNativeBack();
   }
 
   consume(action) {
@@ -81,6 +82,22 @@ export class Input {
     if (this.keys.has('KeyQ') || this.keys.has('ArrowLeft')) this.lookDelta += 2.4 * dt;
     if (this.keys.has('KeyE') || this.keys.has('ArrowRight')) this.lookDelta -= 2.4 * dt;
     this.dash = this.dashTouch || this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
+  }
+
+  // ---------------------------------------------------------------- Android の戻るボタン（アプリ版のみ）
+  // Capacitor のアプリ内では window.Capacitor.Plugins.App が使える。押されたら onBack（ゲーム側が設定）を呼ぶ
+  _bindNativeBack() {
+    const App = window.Capacitor?.Plugins?.App;
+    if (!App) return;
+    App.addListener('backButton', () => { if (this.onBack) this.onBack(); });
+  }
+
+  exitApp() {
+    window.Capacitor?.Plugins?.App?.exitApp();
+  }
+
+  get isNativeApp() {
+    return !!window.Capacitor?.isNativePlatform?.();
   }
 
   // ---------------------------------------------------------------- キーボード

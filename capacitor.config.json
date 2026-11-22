@@ -1,0 +1,8 @@
+{
+  "appId": "io.github.norenface.essencelabyrinth",
+  "appName": "精髄の迷宮",
+  "webDir": "web",
+  "android": {
+    "backgroundColor": "#07080c"
+  }
+}

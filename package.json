@@ -1,0 +1,20 @@
+{
+  "name": "essence-labyrinth",
+  "version": "0.2.0",
+  "private": true,
+  "description": "精髄の迷宮 — 一人称 3D ダンジョン探索 RPG（Android: Capacitor / PC: Electron）",
+  "scripts": {
+    "serve": "python3 -m http.server 8000 --directory web",
+    "android:sync": "cap sync android",
+    "android:build": "cap sync android && cd android && ./gradlew assembleDebug",
+    "android:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.2"
+  }
+}

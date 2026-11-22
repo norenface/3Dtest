@@ -8,3 +8,6 @@ blender/cache/
 # Blender の編集用ファイルはビルドで生成する（大きくなるのでコミットしない）
 *.blend
 *.blend1
+
+# アプリのビルド成果物
+dist/

@@ -1334,6 +1334,18 @@ function step(dt) {
   if (world.state === 'playing') updateHUD();
 }
 
+// ====================================================================== Android の戻るボタン
+input.onBack = () => {
+  switch (world.state) {
+    case 'playing': if (!player.dead) openMenu(); break;
+    case 'menu':
+    case 'absorb': closeModal(); break;
+    case 'result': showHub(); break;
+    case 'hub': showTitle(); break;
+    case 'title': input.exitApp(); break;
+  }
+};
+
 // ====================================================================== タイトル画面のボタン
 $('#btn-start').onclick = () => showHub();
 $('#btn-quality').onclick = () => { toggleQuality(); showTitle(); };
