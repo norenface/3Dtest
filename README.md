@@ -28,6 +28,24 @@ python3 -m http.server 8000
 | 調べる（精髄・帰還の石碑） | F / Enter | 調べるボタン |
 | メニュー（一時停止） | Esc / P（マウスの固定も外れる） | ≡ ボタン |
 
+## Android アプリ（APK）
+
+```bash
+npm install                      # Capacitor（初回のみ）
+npm run android:build            # web/ を android/ にコピーして、デバッグ版 APK をビルド
+# → android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+* Android SDK（platform 36・build-tools 36.0.0）と JDK 21 が必要。`android/local.properties` に `sdk.dir=<SDK の場所>` を書く
+  （クラウド環境「3Dtest」ではセットアップスクリプトで用意される）
+* アイコン・起動画面を作り直すとき：`python3 tools/make_android_assets.py`
+* アプリ版の仕様：横画面固定、全画面（バーは画面端からスワイプで一時表示）、プレイ中は画面が消えない。
+  戻るボタンは 探索中→一時停止 / メニュー→閉じる / 結果→拠点 / 拠点→タイトル / タイトル→終了
+
+スマホへのインストール：APK をスマホにダウンロードして開き、「提供元不明のアプリ」のインストールを許可する。
+デバッグ版の署名はビルドした環境ごとに変わるため、別の環境でビルドした APK は上書きインストールできない
+（いったんアンインストールが必要で、その際セーブデータも消える）。
+
 ### 遊びの流れ
 
 タイトル → **拠点**（換金・買い物・ビルド調整）→ **迷宮**（制限時間内に精髄を集めて帰還）→ 結果 → 拠点 …
