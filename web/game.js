@@ -130,7 +130,7 @@ function seeded(seed) {
 // 動く物（魔物・武器）を照らすため、プレイヤーに近いクリスタル 4 つにだけ本物の光源を置く。
 const CRYSTAL_REACH = 3;     // クリスタルの光が届くマス数（壁の向こうには届かない）
 const CRYSTAL_VIEW = 5;      // 見通しの計算で使うマス数（これより離れた所は暗黒地帯）
-// 明るさはマスごとの値を入れたテクスチャ（glowMap）から読む。壁の面は「面が向いている側の床のマス」の明るさになるので、
+// 明るさはマスごとの値を入れたテクスチャ（glowMap）から読む（水晶の迷宮では、歩ける床が明るい青・壁は暗い紺）。壁の面は「面が向いている側の床のマス」の明るさになるので、
 // 暗黒地帯に面した壁は暗く、明るい通路に面した壁は明るい。床・天井は隣のマスとなめらかにつながる
 function glowMat(color, emissive, intensity, glowMap) {
   const m = new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: intensity, flatShading: true, roughness: 0.9, metalness: 0 });
@@ -342,7 +342,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   }
   const tmp = new THREE.Object3D();
   const col = new THREE.Color();
-  const floorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.2, T), crystalMode ? glowMat(0x1a2440, 0x2c6cc4, 0.75, glowMap) : flatMat(0xffffff, { roughness: 0.95 }), floorCells.length);
+  const floorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.2, T), crystalMode ? glowMat(0x2a4f8c, 0x4a96ee, 0.85, glowMap) : flatMat(0xffffff, { roughness: 0.95 }), floorCells.length);
   floorCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, -0.1, r * T); tmp.rotation.set(0, 0, 0); tmp.scale.set(1, 1, 1); tmp.updateMatrix();
     floorMesh.setMatrixAt(i, tmp.matrix);
@@ -353,7 +353,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   root.add(floorMesh);
 
   // 床の継ぎ目（石畳っぽく見せる細い溝）
-  const seamMat = flatMat(crystalMode ? 0x0b1428 : 0x1c1b1a);
+  const seamMat = flatMat(crystalMode ? 0x1d3d70 : 0x1c1b1a);
   const seamGeoX = new THREE.BoxGeometry(T, 0.02, 0.06), seamGeoZ = new THREE.BoxGeometry(0.06, 0.02, T);
   const seams = new THREE.InstancedMesh(seamGeoX, seamMat, floorCells.length * 2);
   const seamsZ = new THREE.InstancedMesh(seamGeoZ, seamMat, floorCells.length * 2);
@@ -366,7 +366,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   root.add(seams, seamsZ);
 
   // 壁（インスタンス描画。少しずつ色と高さを変えて石積みらしく）
-  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, D.WALL_HEIGHT, T), crystalMode ? glowMat(0x3c64a6, 0x5aa6ff, 0.65, glowMap) : flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
+  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, D.WALL_HEIGHT, T), crystalMode ? glowMat(0x0e1528, 0x1c3460, 0.45, glowMap) : flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
   wallCells.forEach(([r, c], i) => {
     const hy = 1 + (rnd() - 0.5) * 0.08;
     tmp.position.set(c * T, D.WALL_HEIGHT * hy / 2, r * T); tmp.scale.set(1, hy, 1); tmp.updateMatrix();
@@ -381,7 +381,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   world.wallMesh = wallMesh;
 
   // 天井（一人称視点では見上げると見える）
-  const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), crystalMode ? glowMat(0x101830, 0x234f94, 0.55, glowMap) : flatMat(0xffffff, { roughness: 1 }), floorCells.length);
+  const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), crystalMode ? glowMat(0x13213e, 0x2a5aa0, 0.45, glowMap) : flatMat(0xffffff, { roughness: 1 }), floorCells.length);
   floorCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, D.WALL_HEIGHT + 0.15, r * T); tmp.updateMatrix();
     ceil.setMatrixAt(i, tmp.matrix);
@@ -398,7 +398,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   if (!crystalMode) root.add(beams);   // 水晶の迷宮には木の梁はない
 
   // 壁の上端の縁取り（輪郭をわかりやすくする）
-  const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(crystalMode ? 0x26385a : 0x77705f), wallCells.length);
+  const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(crystalMode ? 0x0c1426 : 0x77705f), wallCells.length);
   wallCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, D.WALL_HEIGHT + 0.07, r * T); tmp.updateMatrix(); capMesh.setMatrixAt(i, tmp.matrix);
   });
