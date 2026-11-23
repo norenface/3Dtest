@@ -234,3 +234,52 @@ export function makeViewmodel(colors) {
   root.traverse(o => { if (o.isMesh) o.castShadow = false; });
   return { group: root, parts: { swing, sword } };
 }
+
+// ------------------------------------------------------------------ 階層を移動する門（ポータル）
+// kind: next（下層へ）/ prev（上層へ）/ rift（次元の亀裂へ）/ back（亀裂から元の層へ）
+// closed: 閉ざされた門（光らず、渦の代わりに格子がはまっている）
+const PORTAL_COLORS = { next: 0xb07cff, prev: 0x7ff0ff, rift: 0xff4fd2, back: 0xffd27a };
+export function makePortal(kind, closed = false) {
+  const color = PORTAL_COLORS[kind];
+  const g = new THREE.Group();
+  const stone = closed ? 0x3a3c42 : 0x55596a;
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.6, 0.25, 10), flatMat(0x3c3f48));
+  base.position.y = 0.12; base.receiveShadow = true; g.add(base);
+  // 門の枠（2 本の柱と上の梁）
+  for (const s of [-1, 1]) {
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.35, 2.8, 0.45), flatMat(stone));
+    pillar.position.set(s * 1.1, 1.5, 0); pillar.castShadow = true; g.add(pillar);
+  }
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.4, 0.5), flatMat(stone));
+  lintel.position.y = 3.0; lintel.castShadow = true; g.add(lintel);
+  // 矢印のしるし（下層は下向き、上層は上向き）
+  if (kind === 'next' || kind === 'prev') {
+    const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.32, 4),
+      new THREE.MeshBasicMaterial({ color: closed ? 0x555555 : color }));
+    arrow.position.set(0, 3.0, -0.27);
+    arrow.rotation.z = kind === 'next' ? Math.PI : 0;
+    g.add(arrow);
+  }
+  let swirl = null, light = null;
+  if (closed) {
+    for (let i = -3; i <= 3; i++) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.6, 0.06), flatMat(0x2a2a2e, { metalness: 0.5 }));
+      bar.position.set(i * 0.28, 1.55, 0); g.add(bar);
+    }
+  } else {
+    // 渦（加算合成の円盤を 2 枚、両面から見える）
+    swirl = new THREE.Group();
+    for (const [r, o] of [[0.95, 0.55], [0.6, 0.8]]) {
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 24),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: o, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+      swirl.add(disc);
+    }
+    swirl.position.y = 1.55;
+    swirl.scale.y = 1.35;
+    g.add(swirl);
+    light = new THREE.PointLight(color, 8, 9, 1.6);
+    light.position.set(0, 1.8, 0);
+    g.add(light);
+  }
+  return { group: g, parts: { swirl, light } };
+}

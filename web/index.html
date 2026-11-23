@@ -33,7 +33,11 @@
   .center-info { text-align: center; padding: 6px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
   #floor-name { font-size: 12px; color: var(--muted); }
   #timer { font-size: 26px; font-weight: 700; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
-  #timer.warn { color: var(--danger); animation: pulse 1s infinite; }
+  #timer { font-size: 22px; }
+  #close-info { font-size: 12px; color: var(--muted); }
+  #close-info.warn { color: var(--danger); font-weight: 700; animation: pulse 1s infinite; }
+  #fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity .3s; }
+  #fade.on { opacity: 1; }
   @keyframes pulse { 50% { opacity: .55; } }
   .right-info { padding: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; text-align: right; min-width: 120px; }
   .right-info b { color: var(--gold); }
@@ -139,6 +143,11 @@
   .hub-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .hub-wallet { text-align: right; font-size: 14px; }
   .hub-wallet b { color: var(--gold); font-size: 20px; }
+  .calendar { margin-top: 10px; padding: 8px 12px; border-radius: 8px; font-size: 14px; line-height: 1.7; border: 1px solid var(--line); }
+  .calendar.open { background: rgba(92,184,92,.08); border-color: rgba(92,184,92,.35); }
+  .calendar.closed { background: rgba(217,83,79,.08); border-color: rgba(217,83,79,.35); }
+  .calendar .ok { color: var(--st); }
+  .calendar .ng { color: var(--danger); }
   .hub-note { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: rgba(127,240,255,.08); border: 1px solid rgba(127,240,255,.25); font-size: 14px; }
   .tabs { display: flex; gap: 6px; margin: 14px 0 10px; border-bottom: 1px solid var(--line); }
   .tab { flex: 1; padding: 9px 6px; border: none; border-bottom: 3px solid transparent; background: none; font-size: 15px; color: var(--muted); }
@@ -186,7 +195,8 @@
       </div>
       <div class="center-info">
         <div id="floor-name"></div>
-        <div id="timer">0:00</div>
+        <div id="timer">Day 1</div>
+        <div id="close-info"></div>
       </div>
       <div class="right-info">
         <div>魔石 <b id="stones">0</b></div>
@@ -253,6 +263,7 @@
     <div class="card" id="result-card"></div>
   </div>
 
+  <div id="fade"></div>
   <div id="loading" class="screen"><div class="muted">読み込み中…</div></div>
 </div>
 <script type="module" src="./game.js"></script>

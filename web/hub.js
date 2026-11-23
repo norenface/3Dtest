@@ -2,6 +2,7 @@
 // 迷宮から戻ったとき、またはタイトルから始めたときに開く。数値はすべて data.js の HUB / LORE などから読む。
 import * as D from './data.js';
 import * as Store from './storage.js';
+import { isGateOpen, daysUntilGateOpens } from './time.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -36,12 +37,31 @@ function hex(c) {
 // ---------------------------------------------------------------- 古文書の状態
 export function loreStatus(s, entry) {
   if (s.lore.includes(entry.id)) return { state: 'open' };
-  if (entry.unlock) {
+  if (entry.unlock?.kills) {
     const have = s.kills[entry.unlock.kills] || 0;
     if (have >= entry.unlock.count) return { state: 'free' };
     return { state: 'locked', progress: `${D.MONSTERS[entry.unlock.kills].name}を ${entry.unlock.count} 体倒すと無料（${have}/${entry.unlock.count}）` };
   }
+  if (entry.unlock?.deepest) {
+    if ((s.deepest || 1) >= entry.unlock.deepest) return { state: 'free' };
+    return { state: 'locked', progress: `第${entry.unlock.deepest}層に到達すると無料` };
+  }
   return { state: 'locked' };
+}
+
+// ---------------------------------------------------------------- 暦（地上ゲートの開閉）
+function calendarHTML(s) {
+  const open = isGateOpen(s.day);
+  const T = D.TIME;
+  const floors = D.FLOORS.filter(f => !f.isSpecialRift)
+    .map(f => `第${f.depth}層 ${f.closeDay ?? T.closeDayBase + T.closeDayStep * (f.depth - 1)}日目`).join(' ／ ');
+  return `<div class="calendar ${open ? 'open' : 'closed'}" data-test="calendar">
+    <div><b>第${s.cycle}周期 Day ${s.day}</b> <span class="muted">／ ${T.cycleDays} 日周期</span></div>
+    <div>${open
+      ? '地上ゲート：<b class="ok">開放中</b>（開放日の入場フェイズ）'
+      : `地上ゲート：<b class="ng">閉鎖中</b> — 次の開放日まで あと ${daysUntilGateOpens(s.day)} 日`}</div>
+    <div class="muted">階層の閉鎖日：${floors}</div>
+  </div>`;
 }
 
 // ---------------------------------------------------------------- 描画
@@ -56,16 +76,20 @@ function render() {
         <div class="muted">魔石 ${s.stones} ／ 回復薬 ${s.potions} ／ 霊薬 ${s.oblivion}</div>
       </div>
     </div>
+    ${calendarHTML(s)}
     ${note ? `<div class="hub-note">${note}</div>` : ''}
     <div class="tabs">${TABS.map(([id, label]) => `<button class="tab ${id === tab ? 'on' : ''}" data-tab="${id}">${label}</button>`).join('')}</div>
     <div class="tab-body">${renderTab(s)}</div>
     <div class="btns row">
-      <button class="btn primary" id="hub-depart">迷宮へ出発</button>
+      ${isGateOpen(s.day)
+        ? '<button class="btn primary" id="hub-depart">迷宮へ出発（ゲート開放中）</button>'
+        : `<button class="btn primary" id="hub-wait">次の開放日まで過ごす（${daysUntilGateOpens(s.day)} 日）</button>`}
       <button class="btn" id="hub-title">タイトルへ</button>
     </div>`;
   card.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; readingLore = null; note = ''; render(); });
   card.querySelectorAll('[data-act]').forEach(b => b.onclick = () => act(b.dataset.act, b.dataset.arg));
-  $('#hub-depart').onclick = () => ctx.onDepart();
+  if ($('#hub-depart')) $('#hub-depart').onclick = () => ctx.onDepart();
+  if ($('#hub-wait')) $('#hub-wait').onclick = () => act('waitGate');
   $('#hub-title').onclick = () => ctx.onTitle();
 }
 
@@ -228,6 +252,14 @@ function act(name, arg) {
     case 'loreBack':
       readingLore = null;
       break;
+    case 'waitGate': {
+      // 次の周期の開放日まで都市で過ごす
+      const days = daysUntilGateOpens(s.day);
+      s.cycle++;
+      s.day = 1;
+      note = `都市で ${days} 日を過ごした。第${s.cycle}周期の開放日だ。地上ゲートが開いている。`;
+      break;
+    }
     default:
       return;
   }

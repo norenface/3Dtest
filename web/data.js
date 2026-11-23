@@ -132,23 +132,44 @@ export const MONSTERS = {
   },
 };
 
+// ------------------------------------------------------------------ 時間（迷宮の開閉・階層閉鎖のサイクル）
+// 地上ゲートは cycleDays 日ごとに開く。開放日（各周期の 1 日目）の 0:00〜gateOpenHours 時だけ入場できる。
+// 階層 N の閉鎖日 = closeDayBase + closeDayStep × (N − 1)。閉鎖日を迎えると、その階層にいる者は都市へ送還される。
+export const TIME = {
+  cycleDays: 30,          // 地上ゲートの周期（CYCLE_DAYS。35 などに変更可）
+  gateOpenHours: 6,       // 開放日の入場フェイズ（GATE_OPEN_DURATION）：0:00〜6:00
+  entryHour: 3,           // 入場した時刻（入場フェイズ中）
+  secondsPerDay: 40,      // ゲーム内の 1 日が実時間で何秒か
+  closeDayBase: 7,        // 第 1 層の閉鎖日
+  closeDayStep: 4,        // 1 層深くなるごとに閉鎖が何日遅いか
+  campDays: 1,            // 野営 1 回で進む日数
+  campHeal: 0.3,          // 野営で回復する HP の割合
+  respawnPerDay: 2,       // 日付が変わるたびに湧く魔物の数（プレイヤーから離れた出現地点に）
+  warnHours: 24,          // 閉鎖まで残りこの時間で警告表示
+};
+
 // ------------------------------------------------------------------ 階層
 // map: 1 文字 = 4m 四方のマス
-//   # 壁 / . 床 / S 開始地点 / E 帰還の石碑（出口） / P 柱のある床
+//   # 壁 / . 床 / P 柱のある床
+//   S 上から降りてきたときの到着地点（第 1 層では都市からの入口）
+//   N 下層への門の候補地点 / U 上層への門の候補地点 / R 次元の亀裂の候補地点 / B 亀裂から元の階層へ戻る門
 //   g ゴブリン / w ダイアウルフ / G ストーンゴーレム（の出現地点。足元は床）
+// depth: 階層番号 N（閉鎖日の計算に使う） / closeDay: 指定すると閉鎖日を個別に上書き
+// nextPortalSpawnRate / prevPortalSpawnRate / riftPortalSpawnRate: 各候補地点に門が現れる確率
+//   （下層への門は、確率で 1 つも出なかった場合でも 1 つは必ず出す）
+// monsterScale: 魔物の強さ・魔石の倍率
+// isSpecialRift: 特殊な亀裂。timeMode が 'stopped'（中では時間が止まる）か 'surface'（地上と同じ時間が流れる）
 export const TILE_SIZE = 4.0;
 export const WALL_HEIGHT = 3.5;
 
 export const FLOORS = [
   {
-    id: 1,
+    id: 1, depth: 1,
     name: '第1層 薄暗い回廊',
-    timeLimit: 300, // 秒
-    warnAt: 60,     // 残りこの秒数で警告
-    timeUpPenalty: { stoneLossRate: 0.5 }, // 時間切れで持ち帰りの魔石が半分になる
+    nextPortalSpawnRate: 0.6, prevPortalSpawnRate: 0, riftPortalSpawnRate: 0,
     map: [
       '###############',
-      '#S..#.....#...#',
+      '#S..#.....#..N#',
       '#...#..g..#.w.#',
       '#.......P.....#',
       '###.#.....#...#',
@@ -157,14 +178,103 @@ export const FLOORS = [
       '#..P..#.#..G..#',
       '#.....#...P...#',
       '###.#######.###',
-      '#.w...#.....w.#',
-      '#.....g..P...E#',
+      '#Nw...#.....w.#',
+      '#.....g..P...N#',
       '###############',
     ],
     monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
+    monsterScale: { hp: 1, attack: 1, stones: 1 },
     lighting: { ambient: 0x5a6888, ambientIntensity: 2.6, fog: 0x07080c, torchColor: 0xffa860 },
   },
+  {
+    id: 2, depth: 2,
+    name: '第2層 苔むす石窟',
+    nextPortalSpawnRate: 0.5, prevPortalSpawnRate: 0.7, riftPortalSpawnRate: 0.35,
+    map: [
+      '###############',
+      '#S.....#..w...#',
+      '#.U....#......#',
+      '#...P..#..P..N#',
+      '##.#####.###.##',
+      '#..g...#...g..#',
+      '#......R......#',
+      '#..w...#...G..#',
+      '##.###.#.####.#',
+      '#....#...#....#',
+      '#.N..#.w.#.U.N#',
+      '#....G...#..g.#',
+      '###############',
+    ],
+    monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
+    monsterScale: { hp: 1.45, attack: 1.35, stones: 1.5 },
+    lighting: { ambient: 0x4f7a5c, ambientIntensity: 2.4, fog: 0x060a07, torchColor: 0xc8ff9a },
+  },
+  {
+    id: 3, depth: 3,
+    name: '第3層 灼熱の坑道',
+    nextPortalSpawnRate: 0.5, prevPortalSpawnRate: 0.6, riftPortalSpawnRate: 0,
+    map: [
+      '#################',
+      '#S..#.....w.....#',
+      '#.U.#.###.###.N.#',
+      '#...#.#G....#...#',
+      '##.##.#.###.#.###',
+      '#.....#.#.g.#...#',
+      '#.w.P...#...P.w.#',
+      '#.....#.#.G.#...#',
+      '###.###.###.#.###',
+      '#N....g.....#..U#',
+      '#.G.....P...g..N#',
+      '#################',
+    ],
+    monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
+    monsterScale: { hp: 2.0, attack: 1.7, stones: 2.2 },
+    lighting: { ambient: 0x8a5a48, ambientIntensity: 2.4, fog: 0x0c0605, torchColor: 0xff7a3a },
+  },
+  {
+    id: 4, depth: 4,
+    name: '第4層 深淵の回廊',
+    nextPortalSpawnRate: 0, prevPortalSpawnRate: 0.6, riftPortalSpawnRate: 0,
+    map: [
+      '#################',
+      '#S....#.....#..U#',
+      '#.U...#..G..#...#',
+      '#..P..#.....#.w.#',
+      '##.####.P.###.###',
+      '#.....w...g.....#',
+      '#.G..#######..G.#',
+      '#....#.....#....#',
+      '##.###..w..###.##',
+      '#....g..P..g....#',
+      '#..w.........G..#',
+      '#################',
+    ],
+    monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
+    monsterScale: { hp: 2.7, attack: 2.1, stones: 3.0 },
+    lighting: { ambient: 0x5a4f88, ambientIntensity: 2.2, fog: 0x07060c, torchColor: 0xb08cff },
+  },
+  {
+    // 特殊な亀裂（隠しエリア）：第 2 層にまれに現れる。中では時間が止まり、閉鎖もしない
+    id: 101, depth: 2,
+    name: '次元の亀裂',
+    isSpecialRift: true,
+    timeMode: 'stopped',
+    nextPortalSpawnRate: 0, prevPortalSpawnRate: 0, riftPortalSpawnRate: 0,
+    map: [
+      '###########',
+      '#B...#...G#',
+      '#....#....#',
+      '#.w..P..w.#',
+      '#.........#',
+      '#.G.....G.#',
+      '###########',
+    ],
+    monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
+    monsterScale: { hp: 2.2, attack: 1.8, stones: 3.0, dropBonus: 0.35 },
+    lighting: { ambient: 0x7a3a6a, ambientIntensity: 2.4, fog: 0x0c040a, torchColor: 0xff5ad8 },
+  },
 ];
+export const RIFT_FLOOR_ID = 101;
 
 // ------------------------------------------------------------------ 古文書（ゲーム内攻略メモ）
 // price: 購入価格（ゴールド） / unlock: 条件を満たすと無料で読める（kills: 指定モンスターの累計撃破数）
@@ -172,9 +282,16 @@ export const LORE = [
   { id: 'lore_capacity', title: '魂の器について', price: 30,
     text: '器の容量には限りがある。安い精髄で器を埋めてしまった者は、深層で嘆くことになる。' +
           '吸収した精髄は二度と魂から離れない。ただ一つ、忘却の霊薬を除いては。' },
-  { id: 'lore_time', title: '崩れる回廊', price: 40,
-    text: '回廊は時が満ちると崩れはじめる。崩落に巻き込まれた者は、拾った魔石の半分を失って地上に放り出される。' +
-          '第1層の帰還の石碑は、入口から見て最も遠い南東の角にある。' },
+  { id: 'lore_time', title: '閉ざされる迷宮', price: 40,
+    text: '迷宮の門は三十日に一度、開放日の夜明け前の数刻だけ開く。' +
+          '中に入った者は、いる層が閉ざされる日まで帰れない。第1層は七日目、その下は四日ずつ遅れて閉ざされる。' +
+          '閉ざされた層にいた者は、拾ったものを抱えたまま地上へ吐き出される。' },
+  { id: 'lore_descend', title: '下層への逃げ込み', price: 70, unlock: { deepest: 2 },
+    text: '第1層が閉ざされる直前に下層へ降りれば、さらに四日、迷宮に留まれる。稼ぎたい者の常套手段だ。' +
+          'ただし一度降りた者は、上の層が閉ざされた後には戻れない。早く帰りたければ、閉鎖の前に上層への門を探して戻ることだ。' },
+  { id: 'lore_rift', title: '次元の亀裂', price: 150, unlock: { deepest: 3 },
+    text: '第2層には、まれに空間の裂け目が口を開ける。裂け目の中では時が止まり、層の閉鎖も届かない。' +
+          '強い魔物がひしめくが、落とす精髄も多い。入口の門から元の層へ戻れる。' },
   { id: 'lore_goblin', title: '小鬼の精髄', price: 60, unlock: { kills: 'goblin', count: 5 },
     text: '小鬼の精髄は器をほとんど使わない。器用さが増し、獲物から多くの魔石を剥ぎ取れるようになる。' +
           '急所突きは、ひるんだ相手にこそ真価を発揮する。' },
@@ -218,6 +335,10 @@ export const NEW_GAME = {
   armorLevel: 0,
   lore: [],           // 読めるようになった古文書 ID
   kills: {},          // モンスター ID ごとの累計撃破数
+  cycle: 1,           // 地上ゲートの何周期目か
+  day: 1,             // 周期の何日目か（1 = 開放日）
+  deepest: 1,         // 到達した最も深い階層
+  runInProgress: false, // 探索中か（探索中にアプリが終了した場合の判定に使う）
   runs: 0,
   clears: 0,
 };

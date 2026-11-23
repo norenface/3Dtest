@@ -1,12 +1,14 @@
-// 精髄の迷宮 — Step 2
-// 3D ダンジョン（一人称視点）・移動と攻撃・敵 3 種・精髄のドロップと吸収・精髄スキル・回復薬・制限時間・拠点。
+// 精髄の迷宮
+// 3D ダンジョン（一人称視点）・移動と攻撃・敵 3 種・精髄のドロップと吸収・精髄スキル・回復薬・拠点・
+// 迷宮の開閉と階層閉鎖のサイクル（time.js の TimeManager）・階層間の門・次元の亀裂。
 // ゲームバランスの数値はすべて data.js から読む。入力は input.js、保存は storage.js 経由。
 import * as THREE from 'three';
 import * as D from './data.js';
 import { Input } from './input.js';
 import * as Store from './storage.js';
 import { openHub } from './hub.js';
-import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makeExitStone, flatMat } from './models.js';
+import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makePortal, flatMat } from './models.js';
+import { TimeManager, floorConfig, closeDayOf, checkFloorClosure, formatRemaining } from './time.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -97,7 +99,10 @@ const world = {
   floor: null, grid: [], rows: 0, cols: 0,
   root: null, wallMesh: null, pillars: [], torch: null, exit: null,
   monsters: [], orbs: [], stones: [],
-  time: 0, timeLeft: 0,
+  time: new TimeManager(),   // ゲーム内の日時（迷宮の中で進む）
+  portals: [],               // この階層の門
+  riftReturn: null,          // 亀裂に入る前にいた階層 ID
+  spawnCells: [],            // 魔物の出現地点（湧きに使う）
   run: null,      // この探索の記録
   state: 'title', // title | playing | absorb | menu | result
   hitStop: 0,
@@ -118,7 +123,8 @@ function seeded(seed) {
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-function buildFloor(floorDef) {
+// arrive: 'start'（上から降りてきた／都市から入った）/ 'fromBelow'（下層から戻った）/ 'fromRift'（亀裂から戻った）
+function buildFloor(floorDef, arrive = 'start') {
   if (world.root) scene.remove(world.root);
   const root = new THREE.Group();
   world.root = root;
@@ -131,6 +137,9 @@ function buildFloor(floorDef) {
   world.monsters = [];
   world.orbs = [];
   world.stones = [];
+  world.portals = [];
+  world.spawnCells = [];
+  for (const el of document.querySelectorAll('.ebar')) el.remove();
   const rnd = seeded(floorDef.id * 7919);
   const L = floorDef.lighting;
 
@@ -140,7 +149,8 @@ function buildFloor(floorDef) {
 
   // 床（インスタンス描画）
   const floorCells = [], wallCells = [];
-  let start = null, exitCell = null;
+  let start = null;
+  const portalCells = { N: [], U: [], R: [], B: [] };
   for (let r = 0; r < world.rows; r++) {
     for (let c = 0; c < world.cols; c++) {
       const ch = world.grid[r][c];
@@ -152,7 +162,8 @@ function buildFloor(floorDef) {
       } else {
         floorCells.push([r, c]);
         if (ch === 'S') start = [r, c];
-        if (ch === 'E') exitCell = [r, c];
+        if (portalCells[ch]) portalCells[ch].push([r, c]);
+        if (floorDef.monsterTable[ch]) world.spawnCells.push({ r, c, id: floorDef.monsterTable[ch] });
       }
     }
   }
@@ -271,18 +282,31 @@ function buildFloor(floorDef) {
     return { light: l, base: 14, flame: t.flame };
   });
 
-  // 帰還の石碑
-  const ex = makeExitStone();
-  const ep = cellCenter(...exitCell);
-  ex.group.position.copy(ep);
-  root.add(ex.group);
-  world.exit = { pos: ep, model: ex, radius: 2.2 };
-  world.pillars.push({ x: ep.x, z: ep.z, r: 0.5 });
+  // 門（候補地点ごとに出現率で決める）
+  const depthFloor = d => D.FLOORS.find(f => !f.isSpecialRift && f.depth === d);
+  const pick = (cells, rate, atLeastOne) => {
+    const chosen = cells.filter(() => Math.random() < rate);
+    if (atLeastOne && !chosen.length && cells.length && rate > 0) chosen.push(cells[Math.floor(Math.random() * cells.length)]);
+    return chosen;
+  };
+  const next = floorDef.isSpecialRift ? null : depthFloor(floorDef.depth + 1);
+  const prev = floorDef.isSpecialRift ? null : depthFloor(floorDef.depth - 1);
+  if (next) for (const cell of pick(portalCells.N, floorDef.nextPortalSpawnRate, true)) addPortal('next', cell, next.id);
+  if (prev) for (const cell of pick(portalCells.U, floorDef.prevPortalSpawnRate, false)) addPortal('prev', cell, prev.id);
+  // 亀裂から戻ってきたときは、亀裂の門を必ず置く（そこから出てくる）
+  const riftCells = arrive === 'fromRift' ? portalCells.R.slice(0, 1) : pick(portalCells.R, floorDef.riftPortalSpawnRate, false);
+  for (const cell of riftCells) addPortal('rift', cell, D.RIFT_FLOOR_ID);
+  for (const cell of portalCells.B) addPortal('back', cell, world.riftReturn ?? 1);
 
-  // プレイヤー
-  const sp = cellCenter(...start);
+  // プレイヤーの到着位置
+  let sp = cellCenter(...start ?? portalCells.B[0]);
+  const near = kind => world.portals.find(p => p.kind === kind);
+  if (arrive === 'fromBelow' && near('next')) sp = near('next').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
+  if (arrive === 'fromRift' && near('rift')) sp = near('rift').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
+  if (floorDef.isSpecialRift && near('back')) sp = near('back').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
   player.pos.copy(sp);
-  player.facing = Math.PI;  // 開始時は +Z 方向（ダンジョンの奥）を向く
+  collide(player.pos, 0.45);
+  player.facing = Math.PI;  // +Z 方向（ダンジョンの奥）を向く
   camState.yaw = player.facing;
   camState.pitch = -0.08;
 
@@ -299,6 +323,20 @@ function buildFloor(floorDef) {
     const id = floorDef.monsterTable[world.grid[r][c]];
     if (id) spawnMonster(id, cellCenter(r, c));
   }
+}
+
+function addPortal(kind, [r, c], target) {
+  // 上層への門は、上の層がすでに閉鎖されていたら閉ざされている
+  const closed = kind === 'prev' && checkFloorClosure(world.time.day, target);
+  const model = makePortal(kind, closed);
+  const pos = cellCenter(r, c);
+  model.group.position.copy(pos);
+  model.group.rotation.y = Math.random() < 0.5 ? 0 : Math.PI / 2;
+  world.root.add(model.group);
+  world.portals.push({ kind, pos, model, target, closed });
+  // 門の柱にぶつかるようにする（くぐる中央は通れる）
+  const ax = Math.cos(model.group.rotation.y), az = -Math.sin(model.group.rotation.y);
+  for (const s of [-1, 1]) world.pillars.push({ x: pos.x + ax * 1.1 * s, z: pos.z + az * 1.1 * s, r: 0.3 });
 }
 
 // ====================================================================== プレイヤー
@@ -330,6 +368,7 @@ function refreshStats(keepRatio = true) {
 // ====================================================================== モンスター
 function spawnMonster(id, pos) {
   const def = D.MONSTERS[id];
+  const scale = world.floor.monsterScale ?? { hp: 1, attack: 1, stones: 1 };
   const model = makeMonster(def.model);
   // 被弾時に個体ごと光らせるため、マテリアルを複製する
   const mats = [];
@@ -345,7 +384,9 @@ function spawnMonster(id, pos) {
   const m = {
     def, model, mats, bar,
     pos: pos.clone(), home: pos.clone(), vel: new THREE.Vector3(), facing: Math.random() * Math.PI * 2,
-    hp: def.hp, state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10, stun: 0,
+    hp: Math.round(def.hp * scale.hp), maxHp: Math.round(def.hp * scale.hp),
+    attack: Math.round(def.attack * scale.attack), stones: Math.round(def.stones * scale.stones), dropBonus: scale.dropBonus ?? 0,
+    state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10, stun: 0,
     path: null, pathTimer: 0, aggro: false, wanderTarget: null, deadTimer: 0,
   };
   world.monsters.push(m);
@@ -631,7 +672,7 @@ function killMonster(m) {
   save.kills[m.def.id] = (save.kills[m.def.id] || 0) + 1;
   burst(new THREE.Vector3(m.pos.x, 0.8, m.pos.z), 0xbfe8ff, 40, 5, 3);
   // 魔石
-  const count = m.def.stones + player.st.extraStones;
+  const count = m.stones + player.st.extraStones;
   for (let i = 0; i < count; i++) {
     const s = makeMagicStone();
     const a = Math.random() * Math.PI * 2;
@@ -641,7 +682,7 @@ function killMonster(m) {
   }
   // 精髄
   for (const drop of m.def.drops) {
-    if (Math.random() < drop.chance || world.forceDrops) dropEssence(drop.essence, m.pos);
+    if (Math.random() < drop.chance + m.dropBonus || world.forceDrops) dropEssence(drop.essence, m.pos);
   }
 }
 
@@ -848,7 +889,7 @@ function updateMonsters(dt) {
           if (def.model === 'wolf') { m.vel.x += -Math.sin(m.facing) * 9; m.vel.z += -Math.cos(m.facing) * 9; } // 飛びかかる
           if (dist < def.attackRange + 0.6) {
             const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
-            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) hurtPlayer(def.attack, m.pos.x, m.pos.z);
+            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) hurtPlayer(m.attack, m.pos.x, m.pos.z);
           }
         }
         break;
@@ -957,26 +998,107 @@ function updatePickups(dt) {
     o.model.parts.shell.rotation.x += dt * 0.7;
     o.model.parts.glow.material.opacity = 0.25 + Math.sin(o.t * 4) * 0.1;
   }
-  // 石碑の演出
-  const ex = world.exit.model.parts;
-  ex.ring.rotation.z += dt * 0.8;
-  ex.ring.material.opacity = 0.6 + Math.sin(world.clock * 3) * 0.25;
+  // 門の渦
+  for (const p of world.portals) {
+    const sw = p.model.parts.swirl;
+    if (!sw) continue;
+    sw.children[0].rotation.z += dt * 1.2;
+    sw.children[1].rotation.z -= dt * 2.0;
+    sw.children[0].material.opacity = 0.45 + Math.sin(world.clock * 3) * 0.15;
+  }
   for (const t of world.torchLights) {
     t.light.intensity = t.base + Math.sin(world.clock * 11 + t.light.position.x) * 2 + Math.sin(world.clock * 17.3) * 1.2;
     t.flame.scale.y = 1 + Math.sin(world.clock * 15 + t.light.position.z) * 0.15;
   }
 }
 
-// 調べられる対象（精髄オーブ・帰還の石碑）
+// 調べられる対象（精髄オーブ・門）
+function portalLabel(p) {
+  const target = floorConfig(p.target);
+  if (p.kind === 'next') return `下層への門をくぐる（${target.name}／閉鎖 ${closeDayOf(target)}日目）`;
+  if (p.kind === 'prev') return p.closed ? `上層への門 — ${target.name}はすでに閉ざされている` : `上層への門をくぐる（${target.name}／閉鎖 ${closeDayOf(target)}日目）`;
+  if (p.kind === 'rift') return '空間の裂け目に入る（次元の亀裂）';
+  return `裂け目から出る（${target.name}へ戻る）`;
+}
 function nearestInteractable() {
   let best = null, bestD = Infinity;
   for (const o of world.orbs) {
     const d = Math.hypot(player.pos.x - o.pos.x, player.pos.z - o.pos.z);
     if (d < 1.8 && d < bestD) { best = { type: 'orb', orb: o, label: D.ESSENCES[o.id].name + 'を調べる' }; bestD = d; }
   }
-  const de = Math.hypot(player.pos.x - world.exit.pos.x, player.pos.z - world.exit.pos.z);
-  if (de < world.exit.radius && de < bestD) best = { type: 'exit', label: '帰還の石碑に触れる（地上へ戻る）' };
+  for (const p of world.portals) {
+    const d = Math.hypot(player.pos.x - p.pos.x, player.pos.z - p.pos.z);
+    if (d < 2.2 && d < bestD) { best = { type: 'portal', portal: p, label: portalLabel(p) }; bestD = d; }
+  }
   return best;
+}
+
+// ====================================================================== 階層の移動・時間
+function usePortal(p) {
+  if (p.closed) { log(`${floorConfig(p.target).name}はすでに閉ざされている。この層の閉鎖を待つしかない。`); return; }
+  const from = world.floor;
+  let arrive = 'start';
+  if (p.kind === 'prev') arrive = 'fromBelow';
+  if (p.kind === 'rift') world.riftReturn = from.id;
+  if (p.kind === 'back') { arrive = 'fromRift'; }
+  const target = floorConfig(p.target);
+  fadeTransition(() => {
+    buildFloor(target, arrive);
+    if (p.kind === 'back') world.riftReturn = null;
+    if (!target.isSpecialRift && target.depth > save.deepest) { save.deepest = target.depth; }
+    world.run.deepest = Math.max(world.run.deepest, target.isSpecialRift ? world.run.deepest : target.depth);
+    if (target.isSpecialRift) world.run.rift = true;
+    $('#floor-name').textContent = target.name;
+    applyQuality();
+    if (target.isSpecialRift) log(`${target.name}に入った。ここでは時間が止まっている。`);
+    else log(`${target.name}に着いた。この層は ${closeDayOf(target)} 日目に閉ざされる。`);
+    // 閉鎖済みの層に入ってしまうことはない（上層への門は閉ざされる）が、念のため判定する
+    if (checkFloorClosure(world.time.day, target.id)) endRun('closure');
+  });
+}
+
+function fadeTransition(fn) {
+  const el = $('#fade');
+  world.state = 'transition';
+  input.clear();
+  el.classList.add('on');
+  setTimeout(() => {
+    fn();
+    if (world.state === 'transition') world.state = 'playing';
+    setTimeout(() => el.classList.remove('on'), 60);
+  }, 350);
+}
+
+// 日付が変わったとき：プレイヤーから離れた出現地点に魔物が湧く
+function onNewDay() {
+  log(`${world.time.day} 日目になった。`);
+  const alive = world.monsters.filter(m => m.state !== 'dead');
+  const cands = world.spawnCells.filter(sc => {
+    const p = cellCenter(sc.r, sc.c);
+    if (p.distanceTo(player.pos) < 14 || lineOfSight(p, player.pos)) return false;
+    return !alive.some(m => m.pos.distanceTo(p) < 3);
+  });
+  for (let i = 0; i < D.TIME.respawnPerDay && cands.length; i++) {
+    const sc = cands.splice(Math.floor(Math.random() * cands.length), 1)[0];
+    spawnMonster(sc.id, cellCenter(sc.r, sc.c));
+  }
+}
+
+function enemiesNearby() {
+  return world.monsters.some(m => m.state !== 'dead' && (m.aggro || m.pos.distanceTo(player.pos) < 10));
+}
+
+// 野営：周りに敵がいなければ時間を進め、少し回復する
+function camp() {
+  if (enemiesNearby()) { log('近くに魔物がいて、野営できない。'); return; }
+  if (!world.time.flows(world.floor)) { log('ここでは時間が止まっている。'); return; }
+  const r = world.time.advanceDays(D.TIME.campDays, world.floor);
+  player.hp = Math.min(player.st.maxHp, player.hp + player.st.maxHp * D.TIME.campHeal);
+  player.stamina = player.st.maxStamina;
+  closeModal();
+  log(`野営して休んだ。${world.time.label()}`);
+  if (r.dayChanged) onNewDay();
+  if (r.closed) endRun('closure');
 }
 
 function updateCamera(dt) {
@@ -1039,9 +1161,11 @@ function updateHUD() {
   $('#hp-text').textContent = `${Math.ceil(player.hp)} / ${st.maxHp}`;
   $('#st-bar i').style.width = (player.stamina / st.maxStamina * 100) + '%';
   $('#st-text').textContent = `${Math.floor(player.stamina)} / ${st.maxStamina}`;
-  const t = Math.max(0, Math.ceil(world.timeLeft));
-  $('#timer').textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
-  $('#timer').classList.toggle('warn', world.timeLeft <= world.floor.warnAt);
+  const left = world.time.hoursUntilClose(world.floor);
+  $('#timer').textContent = world.time.label();
+  const ci = $('#close-info');
+  ci.textContent = left === null ? (world.floor.isSpecialRift ? '時間が止まっている' : '') : `この層の閉鎖まで ${formatRemaining(left)}`;
+  ci.classList.toggle('warn', left !== null && left <= D.TIME.warnHours);
   $('#stones').textContent = world.run.stones;
   $('#capacity-text').textContent = `${st.used} / ${st.capacity}`;
   const pips = $('#capacity-pips');
@@ -1060,11 +1184,11 @@ function updateHUD() {
   const s = {};
   for (const m of world.monsters) {
     if (m.state === 'dead') continue;
-    if (m.hp < m.def.hp) {
+    if (m.hp < m.maxHp) {
       toScreen(new THREE.Vector3(m.pos.x, 1.9 + m.def.radius * 1.2, m.pos.z), s);
       m.bar.classList.toggle('hidden', !s.visible);
       m.bar.style.left = s.x + 'px'; m.bar.style.top = s.y + 'px';
-      m.bar.firstChild.style.width = (m.hp / m.def.hp * 100) + '%';
+      m.bar.firstChild.style.width = (m.hp / m.maxHp * 100) + '%';
     }
   }
 }
@@ -1094,6 +1218,8 @@ function showTitle() {
   $('#game-subtitle').textContent = D.GAME_SUBTITLE;
   const race = D.RACES[save.race];
   $('#title-status').innerHTML = `
+    ${world.bootNote ? `<div class="warn-text" style="margin-bottom:8px">${world.bootNote}</div>` : ''}
+    <div class="kv"><span>暦</span><span>第${save.cycle}周期 Day ${save.day}（地上ゲート${save.day === 1 ? '開放中' : '閉鎖中'}）</span></div>
     <div class="kv"><span>種族</span><span>${race.name}</span></div>
     <div class="kv"><span>ゴールド / 魔石</span><span>${save.gold} G / ${save.stones} 個</span></div>
     <div class="kv"><span>探索回数 / 帰還成功</span><span>${save.runs} / ${save.clears}</span></div>
@@ -1117,9 +1243,15 @@ function showHub(message = '') {
   show('#hub-screen');
 }
 
-function startRun(floorIndex = 0) {
-  const floorDef = D.FLOORS[floorIndex];
-  world.run = { floor: floorDef.id, stones: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0, startedAt: performance.now() };
+function startRun() {
+  const floorDef = floorConfig(1);
+  world.run = { floor: floorDef.id, stones: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
+    deepest: 1, rift: false, startDay: save.day, startedAt: performance.now() };
+  // 開放日の入場フェイズに入場する
+  world.time.start(save.day, D.TIME.entryHour);
+  world.riftReturn = null;
+  save.runInProgress = true;
+  Store.saveGame(save);
   for (const el of document.querySelectorAll('.ebar, .popup')) el.remove();
   popups.length = 0;
   player.dead = false;
@@ -1132,8 +1264,7 @@ function startRun(floorIndex = 0) {
   camState.eyeNow = camState.eye;
   camState.shake = 0;
   refreshStats(false);
-  buildFloor(floorDef);
-  world.timeLeft = floorDef.timeLimit;
+  buildFloor(floorDef, 'start');
   $('#floor-name').textContent = floorDef.name;
   $('#log').innerHTML = '';
   $('#hud').classList.remove('hidden');
@@ -1141,7 +1272,7 @@ function startRun(floorIndex = 0) {
   input.clear();
   input.enabled = true;
   world.state = 'playing';
-  log(`${floorDef.name}に降り立った。制限時間内に帰還の石碑を探せ。`);
+  log(`${floorDef.name}に降り立った。この層は ${closeDayOf(floorDef)} 日目に閉ざされ、そのとき地上へ送還される。`);
   applyQuality();
 }
 
@@ -1220,15 +1351,17 @@ function openMenu() {
   input.enabled = false;
   input.clear();
   $('#menu-card').innerHTML = `
-    <h2>一時停止</h2>
+    <h2>一時停止 <span class="muted" style="font-size:14px">${world.time.label()} ／ ${world.floor.name}</span></h2>
     ${statusSummaryHTML()}
     <div class="btns">
       <button class="btn primary" id="btn-resume">探索に戻る</button>
+      <button class="btn" id="btn-camp" ${enemiesNearby() || !world.time.flows(world.floor) ? 'disabled' : ''}>野営して時間を進める（${D.TIME.campDays} 日・HP 回復）${enemiesNearby() ? ' — 近くに魔物がいる' : ''}</button>
       <button class="btn" id="btn-menu-quality">画質：${settings.quality === 'high' ? '高' : '低'}（切り替え）</button>
-      <button class="btn danger" id="btn-giveup">探索をあきらめる（この探索の魔石は失う）</button>
+      <button class="btn danger" id="btn-giveup">探索を放棄する（魔石を失い、この層の閉鎖日に地上へ戻る）</button>
     </div>`;
   show('#menu-screen');
   $('#btn-resume').onclick = closeModal;
+  $('#btn-camp').onclick = camp;
   $('#btn-menu-quality').onclick = () => { toggleQuality(); openMenu(); };
   $('#btn-giveup').onclick = () => endRun('giveup');
 }
@@ -1249,23 +1382,30 @@ function endRun(reason) {
   const floorDef = world.floor;
   let kept = run.stones;
   let title = '', cls = 'ok', note = '';
-  if (reason === 'exit') { title = '帰還成功'; note = '持ち帰った魔石をすべて手に入れた。'; save.clears++; }
-  if (reason === 'timeup') {
-    kept = Math.floor(run.stones * (1 - floorDef.timeUpPenalty.stoneLossRate));
-    title = '時間切れ — 強制帰還'; cls = 'ng';
-    note = `回廊が崩れ、魔石の一部を落とした（${run.stones} → ${kept}）。`;
+  if (reason === 'closure') {
+    title = '帰還（階層の閉鎖）';
+    note = `${world.time.day} 日目、${floorDef.name}が閉ざされ、地上へ送還された。持ち帰った魔石をすべて手に入れた。`;
+    save.clears++;
   }
   if (reason === 'dead') { kept = 0; title = '力尽きた'; cls = 'ng'; note = 'この探索で得た魔石はすべて失われた。吸収した精髄は魂に残っている。'; }
-  if (reason === 'giveup') { kept = 0; title = '探索を中断した'; cls = 'ng'; note = 'この探索で得た魔石は失われた。'; }
+  if (reason === 'giveup') {
+    // あきらめても、いる層が閉ざされるまでは地上に戻れない（閉鎖日まで迷宮で過ごした扱い）
+    const cd = closeDayOf(floorDef.isSpecialRift ? floorConfig(world.riftReturn ?? 1) : floorDef);
+    if (cd !== null && world.time.day < cd) world.time.start(cd, 0);
+    kept = 0; title = '探索を放棄した'; cls = 'ng';
+    note = `この探索で得た魔石は失われた。${world.time.day} 日目に層が閉ざされるまで、迷宮をさまよった。`;
+  }
   save.stones += kept;
   save.runs++;
+  // 都市の日付を、迷宮を出た日に合わせる（地上ゲートは次の開放日まで閉じている）
+  save.day = Math.min(D.TIME.cycleDays, Math.max(save.day, world.time.day));
+  save.runInProgress = false;
   Store.saveGame(save);
-  const elapsed = Math.round(floorDef.timeLimit - world.timeLeft);
   $('#result-card').innerHTML = `
     <div class="result-title ${cls}">${title}</div>
     <div class="muted" style="text-align:center">${note}</div>
-    <div class="kv" style="margin-top:12px"><span>階層</span><span>${floorDef.name}</span></div>
-    <div class="kv"><span>探索時間</span><span>${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}</span></div>
+    <div class="kv" style="margin-top:12px"><span>最後にいた階層 / 到達した最深層</span><span>${floorDef.name} / 第${run.deepest}層${run.rift ? '（亀裂にも入った）' : ''}</span></div>
+    <div class="kv"><span>迷宮にいた期間</span><span>Day ${run.startDay} → Day ${world.time.day}</span></div>
     <div class="kv"><span>倒した敵</span><span>${run.kills}</span></div>
     <div class="kv"><span>持ち帰った魔石</span><span>${kept}（所持 ${save.stones}）</span></div>
     <div class="kv"><span>吸収した精髄</span><span>${run.absorbed.map(id => D.ESSENCES[id].name).join('・') || 'なし'}</span></div>
@@ -1312,18 +1452,19 @@ function step(dt) {
     updateCamera(dt);
     return;
   }
-  if (world.state !== 'playing' && world.state !== 'result') { updateParticles(dt); updatePopups(dt); return; }
+  if (world.state !== 'playing' && world.state !== 'result') { updateParticles(dt); updatePopups(dt); updatePickups(dt); return; }
   if (world.state === 'playing' && input.consume('menu')) { openMenu(); return; }
   if (world.hitStop > 0) { world.hitStop -= dt; updatePopups(dt); return; } // ヒットストップ中は時間を止める
   world.clock += dt;
   if (world.state === 'playing') {
-    world.timeLeft -= dt;
-    if (world.timeLeft <= 0) { world.timeLeft = 0; endRun('timeup'); }
+    const t = world.time.tick(dt, world.floor);
+    if (t.dayChanged) onNewDay();
+    if (t.closed && !player.dead) { endRun('closure'); return; }
     updatePlayer(dt);
     if (input.consume('interact') && !player.dead) {
       const it = nearestInteractable();
       if (it?.type === 'orb') openAbsorb(it.orb);
-      else if (it?.type === 'exit') endRun('exit');
+      else if (it?.type === 'portal') usePortal(it.portal);
     }
   }
   updateMonsters(dt);
@@ -1359,7 +1500,16 @@ $('#btn-reset').onclick = () => {
 // 起動
 resize();
 player.st = computeStats();
-buildFloor(D.FLOORS[0]);  // タイトルの背景として第 1 層を表示する
+// 前回、探索中にアプリが終了していたら失敗扱いにする（拾った魔石は失われ、地上ゲートは閉じている）
+if (save.runInProgress) {
+  save.runInProgress = false;
+  save.runs++;
+  save.day = Math.max(save.day, closeDayOf(1));
+  Store.saveGame(save);
+  world.bootNote = '前回の探索は途中で中断された。その探索で拾った魔石は失われた。';
+}
+world.time.start(save.day, 0);
+buildFloor(floorConfig(1));  // タイトルの背景として第 1 層を表示する
 vmScene.add(player.viewmodel.group);
 applyQuality();
 showTitle();
@@ -1375,7 +1525,12 @@ window.game = {
   face(x, z) { camState.yaw = Math.atan2(-(x - player.pos.x), -(z - player.pos.z)); camState.pitch = -0.1; },
   get cam() { return camState; },
   tile(r, c) { return cellCenter(r, c); },
-  setTime(t) { world.timeLeft = t; },
+  get time() { return world.time; },
+  setHours(h) { world.time.hours = h; },
+  portals() { return world.portals; },
+  rebuild(id, arrive = 'start') { buildFloor(floorConfig(id), arrive); },
+  usePortal,
+  camp,
   forceDrops(on = true) { world.forceDrops = on; },
   attack() { input.pressed.add('attack'); },
   interact() { input.pressed.add('interact'); },
