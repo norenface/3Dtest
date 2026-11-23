@@ -2,7 +2,7 @@
 // 迷宮から戻ったとき、またはタイトルから始めたときに開く。数値はすべて data.js の HUB / LORE などから読む。
 import * as D from './data.js';
 import * as Store from './storage.js';
-import { isGateOpen, daysUntilGateOpens } from './time.js';
+import { isGateOpen, daysUntilGateOpens, isLateEntry, formatClock } from './time.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -24,6 +24,14 @@ export function openHub(context, message = '') {
   note = message;
   if (message) tab = ctx.getSave().stones > 0 ? 'sell' : tab;
   render();
+}
+
+// 開放日の時刻が進んだとき（game.js から呼ぶ）。暦の部分だけ描き直し、ゲートが閉じた・閉門間際になったときは全体を描き直す
+export function hubClockChanged(changedPhase, message = '') {
+  if (!ctx) return;
+  if (changedPhase) { if (message) note = message; render(); return; }
+  const el = $('#hub-calendar');
+  if (el) el.outerHTML = calendarHTML(ctx.getSave());
 }
 
 function save() {
@@ -51,15 +59,18 @@ export function loreStatus(s, entry) {
 
 // ---------------------------------------------------------------- 暦（地上ゲートの開閉）
 function calendarHTML(s) {
-  const open = isGateOpen(s.day);
+  const open = isGateOpen(s.day, s.hour);
   const T = D.TIME;
+  const left = T.gateOpenHours - s.hour;
+  const leftText = left >= 1 ? `${Math.floor(left)} 時間 ${Math.floor((left % 1) * 60)} 分` : `${Math.floor(left * 60)} 分`;
   const floors = D.FLOORS.filter(f => !f.isSpecialRift)
     .map(f => `第${f.depth}層 ${f.closeDay ?? T.closeDayBase + T.closeDayStep * (f.depth - 1)}日目`).join(' ／ ');
-  return `<div class="calendar ${open ? 'open' : 'closed'}" data-test="calendar">
-    <div><b>第${s.cycle}周期 Day ${s.day}</b> <span class="muted">／ ${T.cycleDays} 日周期</span></div>
+  return `<div class="calendar ${open ? 'open' : 'closed'}" data-test="calendar" id="hub-calendar">
+    <div><b>第${s.cycle}周期 Day ${s.day}${s.day === 1 ? ` <span data-test="clock">${formatClock(s.hour)}</span>` : ''}</b> <span class="muted">／ ${T.cycleDays} 日周期</span></div>
     <div>${open
-      ? '地上ゲート：<b class="ok">開放中</b>（開放日の入場フェイズ）'
-      : `地上ゲート：<b class="ng">閉鎖中</b> — 次の開放日まで あと ${daysUntilGateOpens(s.day)} 日`}</div>
+      ? `地上ゲート：<b class="ok">開放中</b> — 閉じるまで あと ${leftText}（${String(T.gateOpenHours).padStart(2, '0')}:00 に閉門）`
+      : `地上ゲート：<b class="ng">閉鎖中</b> — 次の開放日まで あと ${daysUntilGateOpens(s.day, s.hour)} 日`}</div>
+    ${open && isLateEntry(s.hour) ? '<div class="warn-text" data-test="late">閉門間際：いま入ると、暗黒地帯に降り立ってしまうおそれがある</div>' : ''}
     <div class="muted">階層の閉鎖日：${floors}</div>
   </div>`;
 }
@@ -81,9 +92,9 @@ function render() {
     <div class="tabs">${TABS.map(([id, label]) => `<button class="tab ${id === tab ? 'on' : ''}" data-tab="${id}">${label}</button>`).join('')}</div>
     <div class="tab-body">${renderTab(s)}</div>
     <div class="btns row">
-      ${isGateOpen(s.day)
+      ${isGateOpen(s.day, s.hour)
         ? '<button class="btn primary" id="hub-depart">迷宮へ出発（ゲート開放中）</button>'
-        : `<button class="btn primary" id="hub-wait">次の開放日まで過ごす（${daysUntilGateOpens(s.day)} 日）</button>`}
+        : `<button class="btn primary" id="hub-wait">次の開放日まで過ごす（${daysUntilGateOpens(s.day, s.hour)} 日）</button>`}
       <button class="btn" id="hub-title">タイトルへ</button>
     </div>`;
   card.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; readingLore = null; note = ''; render(); });
@@ -259,9 +270,10 @@ function act(name, arg) {
       break;
     case 'waitGate': {
       // 次の周期の開放日まで都市で過ごす
-      const days = daysUntilGateOpens(s.day);
+      const days = daysUntilGateOpens(s.day, s.hour);
       s.cycle++;
       s.day = 1;
+      s.hour = 0;
       note = `都市で ${days} 日を過ごした。第${s.cycle}周期の開放日だ。地上ゲートが開いている。`;
       break;
     }

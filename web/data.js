@@ -138,7 +138,11 @@ export const MONSTERS = {
 export const TIME = {
   cycleDays: 30,          // 地上ゲートの周期（CYCLE_DAYS。35 などに変更可）
   gateOpenHours: 6,       // 開放日の入場フェイズ（GATE_OPEN_DURATION）：0:00〜6:00
-  entryHour: 3,           // 入場した時刻（入場フェイズ中）
+  entryHour: 3,           // （テスト用の既定値。実際の入場時刻は都市で過ごした時間で決まる）
+  // 開放日は都市でも時間が流れる（迷宮と同じ速さ）。閉門まで lateEntryHours 時間を切ってから入ると「閉門間際の入場」になり、
+  // lateDarkChance の確率で第1層の暗黒地帯に降り立ってしまう（ふだんは暗黒地帯以外のランダムな場所に降り立つ）
+  lateEntryHours: 1,
+  lateDarkChance: 0.5,
   secondsPerDay: 300,     // ゲーム内の 1 日が実時間で何秒か（5 分）
   closeDayBase: 7,        // 第 1 層の閉鎖日
   closeDayStep: 4,        // 1 層深くなるごとに閉鎖が何日遅いか
@@ -170,7 +174,7 @@ export const FLOORS = [
     name: '第1層 水晶灯の迷宮',
     // 十字形の迷路。中央の広場に降り立ち、最も北の切れ込みに下層への門がある（tools/gen_floor1.py で作成）。
     // 外周の回廊にはライトクリスタルがなく、先が見通せない「暗黒地帯」
-    startFacing: 'north',
+    randomStart: true,     // 降り立つ場所はランダム（暗黒地帯以外。閉門間際の入場では暗黒地帯もありうる）
     nextPortalSpawnRate: 1, prevPortalSpawnRate: 0, riftPortalSpawnRate: 0,
     map: [
       '###################################',
@@ -383,6 +387,7 @@ export const NEW_GAME = {
   cycle: 1,           // 地上ゲートの何周期目か
   day: 1,             // 周期の何日目か（1 = 開放日）
   deepest: 1,         // 到達した最も深い階層
+  hour: 0,           // 開放日の都市の時刻（0:00〜。開放日だけ時間が流れる）
   runInProgress: false, // 探索中か（探索中にアプリが終了した場合、次の起動で続きから再開する）
   runs: 0,
   clears: 0,

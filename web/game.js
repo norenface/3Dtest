@@ -6,9 +6,9 @@ import * as THREE from 'three';
 import * as D from './data.js';
 import { Input } from './input.js';
 import * as Store from './storage.js';
-import { openHub } from './hub.js';
+import { openHub, hubClockChanged } from './hub.js';
 import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makePortal, flatMat } from './models.js';
-import { TimeManager, floorConfig, closeDayOf, checkFloorClosure, formatRemaining } from './time.js';
+import { TimeManager, floorConfig, closeDayOf, checkFloorClosure, formatRemaining, isGateOpen, isLateEntry, formatClock } from './time.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -286,6 +286,30 @@ function updateCrystalLights(dt) {
   });
 }
 
+// 降り立つ場所を選ぶ（randomStart の階層）。ふだんはクリスタルの明かりが届く場所のどこか。
+// 閉門間際の入場（late）では lateDarkChance の確率で暗黒地帯になる。魔物の出現地点と門のそばは避ける
+function chooseLanding(floorDef, late) {
+  const avoid = [];
+  for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
+    const ch = world.grid[r][c];
+    if (floorDef.monsterTable[ch] || 'NURB'.includes(ch)) avoid.push([r, c]);
+  }
+  const lit = [], dark = [];
+  for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
+    if (isWallCell(r, c) || avoid.some(([ar, ac]) => Math.abs(ar - r) + Math.abs(ac - c) < 4)) continue;
+    if (!world.vis) { lit.push([r, c]); continue; }
+    if (world.vis[r][c] < 0.05) dark.push([r, c]);
+    else if (world.glow[r][c] >= 0.3) lit.push([r, c]);
+  }
+  const toDark = late && dark.length > 0 && Math.random() < D.TIME.lateDarkChance;
+  const pool = toDark ? dark : lit;
+  const cell = pool[Math.floor(Math.random() * pool.length)];
+  // 開けている方を向く
+  const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]].filter(([dr, dc]) => !isWallCell(cell[0] + dr, cell[1] + dc));
+  const [dr, dc] = dirs.length ? dirs[Math.floor(Math.random() * dirs.length)] : [-1, 0];
+  return { cell, dark: toDark, yaw: Math.atan2(-dc, -dr) };
+}
+
 // restore: オートセーブから再開するときの状態（門・魔物・落ちている物・プレイヤーの位置をそのまま戻す）
 function buildFloor(floorDef, arrive = 'start', restore = null) {
   if (world.root) scene.remove(world.root);
@@ -311,6 +335,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   scene.fog = new THREE.Fog(L.fog, 14, crystalMode ? L.litFog : 42);
   root.add(new THREE.HemisphereLight(L.ambient, 0x10100c, L.ambientIntensity));
   world.vis = null;
+  world.glow = null;
   world.crystalPoints = null;
   world.inDark = false;
 
@@ -337,7 +362,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   let crystals = [], glowMap = null;
   if (crystalMode) {
     crystals = floorCells.filter(([r, c]) => world.grid[r][c] === 'C');
-    glowMap = makeGlowMap(crystalField(crystals, CRYSTAL_REACH));
+    world.glow = crystalField(crystals, CRYSTAL_REACH);
+    glowMap = makeGlowMap(world.glow);
     world.vis = crystalField(crystals, CRYSTAL_VIEW);
   }
   const tmp = new THREE.Object3D();
@@ -487,6 +513,14 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   player.pos.copy(sp);
   player.facing = Math.PI;  // +Z 方向（ダンジョンの奥）を向く
   if (arrive === 'start' && floorDef.startFacing === 'north') player.facing = 0;   // -Z（マップの上＝北）
+  world.landedInDark = false;
+  if (arrive === 'start' && floorDef.randomStart && !restore) {
+    const land = chooseLanding(floorDef, world.entryLate);
+    sp = cellCenter(...land.cell);
+    player.pos.copy(sp);
+    player.facing = land.yaw;
+    world.landedInDark = land.dark;
+  }
   if (restore) { player.pos.set(restore.player.x, 0, restore.player.z); player.facing = restore.player.yaw; }
   collide(player.pos, 0.45);
   camState.yaw = player.facing;
@@ -1442,7 +1476,7 @@ function showTitle() {
   const race = D.RACES[save.race];
   $('#title-status').innerHTML = `
     ${world.bootNote ? `<div class="warn-text" style="margin-bottom:8px">${world.bootNote}</div>` : ''}
-    <div class="kv"><span>暦</span><span>第${save.cycle}周期 Day ${save.day}（地上ゲート${save.day === 1 ? '開放中' : '閉鎖中'}）</span></div>
+    <div class="kv"><span>暦</span><span>第${save.cycle}周期 Day ${save.day}${save.day === 1 ? ' ' + formatClock(save.hour) : ''}（地上ゲート${isGateOpen(save.day, save.hour) ? '開放中' : '閉鎖中'}）</span></div>
     <div class="kv"><span>種族</span><span>${race.name}</span></div>
     <div class="kv"><span>ゴールド / 魔石</span><span>${save.gold} G / ${save.stones} 個</span></div>
     <div class="kv"><span>探索回数 / 帰還成功</span><span>${save.runs} / ${save.clears}</span></div>
@@ -1500,8 +1534,9 @@ function startRun() {
   Store.savePreRun({ ...save, runInProgress: false });
   world.run = { floor: floorDef.id, stones: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
     deepest: 1, rift: false, startDay: save.day, startedAt: performance.now() };
-  // 開放日の入場フェイズに入場する
-  world.time.start(save.day, D.TIME.entryHour);
+  // 都市で過ごした時刻に入場する。閉門間際なら暗黒地帯に降り立つおそれがある
+  world.time.start(save.day, save.hour);
+  world.entryLate = isLateEntry(save.hour);
   world.riftReturn = null;
   save.runInProgress = true;
   world.pendingResume = null;
@@ -1509,7 +1544,9 @@ function startRun() {
   prepareRun();
   buildFloor(floorDef, 'start');
   enterPlaying(floorDef);
+  world.entryLate = false;
   log(`${floorDef.name}に降り立った。この層は ${closeDayOf(floorDef)} 日目に閉ざされ、そのとき地上へ送還される。`);
+  if (world.landedInDark) log('閉門間際に飛び込んだせいで、暗黒地帯に降り立ってしまった……');
   autosave();
 }
 
@@ -1706,7 +1743,12 @@ function endRun(reason, source = '') {
   save.stones += kept;
   save.runs++;
   // 都市の日付を、迷宮を出た日に合わせる（地上ゲートは次の開放日まで閉じている）。力尽きたときは出発前の日付のまま
-  if (reason !== 'dead') save.day = Math.min(D.TIME.cycleDays, Math.max(save.day, world.time.day));
+  if (reason !== 'dead') {
+    const before = save.day;
+    save.day = Math.min(D.TIME.cycleDays, Math.max(save.day, world.time.day));
+    // 開放日のうちに戻ってきたら、都市の時刻も進める
+    save.hour = save.day === 1 ? Math.max(before === 1 ? save.hour : 0, world.time.hours % 24) : 0;
+  }
   save.runInProgress = false;
   Store.saveGame(save);
   Store.clearRun();
@@ -1750,6 +1792,21 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+// 開放日は都市でも時間が流れる（迷宮と同じ速さ）。入場フェイズが過ぎるとゲートが閉じる
+function updateCityClock(dt) {
+  const T = D.TIME;
+  if (save.day !== 1 || save.hour >= T.gateOpenHours) return;
+  const before = save.hour;
+  save.hour = Math.min(T.gateOpenHours, save.hour + dt / T.secondsPerDay * 24);
+  world.citySaveTimer = (world.citySaveTimer ?? 0) + dt;
+  const closed = save.hour >= T.gateOpenHours;
+  const late = isLateEntry(save.hour) && !isLateEntry(before);
+  if (closed || late || world.citySaveTimer > 5) { world.citySaveTimer = 0; Store.saveGame(save); }
+  if (closed) hubClockChanged(true, '地上ゲートが閉じた。次の開放日まで待つしかない。');
+  else if (late) hubClockChanged(true, 'まもなく地上ゲートが閉じる。いま飛び込むと、暗黒地帯に降り立ってしまうかもしれない。');
+  else if (Math.floor(before * 60) !== Math.floor(save.hour * 60)) hubClockChanged(false);
+}
+
 function step(dt) {
   input.update(dt);
   if (world.state === 'title') {
@@ -1761,6 +1818,7 @@ function step(dt) {
     updateCamera(dt);
     return;
   }
+  if (world.state === 'hub') updateCityClock(dt);
   if (world.state !== 'playing' && world.state !== 'result') { updateParticles(dt); updatePopups(dt); updatePickups(dt); return; }
   if (world.state === 'playing' && input.consume('menu')) { openMenu(); return; }
   if (world.hitStop > 0) { world.hitStop -= dt; updatePopups(dt); return; } // ヒットストップ中は時間を止める
@@ -1849,6 +1907,8 @@ window.game = {
   tile(r, c) { return cellCenter(r, c); },
   get time() { return world.time; },
   setHours(h) { world.time.hours = h; },
+  setCityHour(h) { save.hour = h; },
+  get landing() { return { dark: world.landedInDark, vis: visibilityAt(player.pos), glow: world.glow?.[Math.round(player.pos.z / T)]?.[Math.round(player.pos.x / T)] }; },
   portals() { return world.portals; },
   rebuild(id, arrive = 'start') { buildFloor(floorConfig(id), arrive); },
   usePortal,

@@ -35,9 +35,21 @@ export function isGateOpen(day, hour = 0) {
   return day === 1 && hour < TIME.gateOpenHours;
 }
 
-// 次の開放日まであと何日か（今日が開放日なら 0）
-export function daysUntilGateOpens(day) {
-  return day === 1 ? 0 : TIME.cycleDays - day + 1;
+// 次の開放日まであと何日か（今日が開放日でゲートが開いていれば 0。開放日でも入場フェイズが過ぎていれば次の周期まで）
+export function daysUntilGateOpens(day, hour = 0) {
+  if (day === 1) return hour < TIME.gateOpenHours ? 0 : TIME.cycleDays;
+  return TIME.cycleDays - day + 1;
+}
+
+// 閉門間際の入場か（ゲートが閉じるまで lateEntryHours 時間を切っている）
+export function isLateEntry(hour) {
+  return hour >= TIME.gateOpenHours - TIME.lateEntryHours;
+}
+
+// 時刻の表示 'HH:MM'
+export function formatClock(hours) {
+  const h = Math.floor(hours % 24), m = Math.floor((hours * 60) % 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 export class TimeManager {
