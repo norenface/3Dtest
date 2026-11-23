@@ -5,6 +5,8 @@ import { NEW_GAME } from './data.js';
 
 const SAVE_KEY = 'essence-labyrinth/save/v1';
 const SETTINGS_KEY = 'essence-labyrinth/settings/v1';
+const PRE_RUN_KEY = 'essence-labyrinth/prerun/v1';   // 迷宮に入る直前のセーブ（力尽きたときに戻す）
+const RUN_KEY = 'essence-labyrinth/run/v1';          // 探索中の状態（オートセーブ。アプリを閉じても続きから遊べる）
 
 // 保存先。localStorage が使えない環境（プライベートモード等）ではメモリに保持する
 const memory = {};
@@ -45,7 +47,37 @@ export function saveGame(data) {
 
 export function resetGame() {
   backend.remove(SAVE_KEY);
+  clearRun();
   return clone(NEW_GAME);
+}
+
+function loadJSON(key) {
+  const raw = backend.get(key);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// ---- 迷宮に入る直前のセーブ（出発時に保存し、力尽きたらこれに戻す）
+export function savePreRun(data) {
+  backend.set(PRE_RUN_KEY, JSON.stringify(data));
+}
+export function loadPreRun() {
+  const d = loadJSON(PRE_RUN_KEY);
+  return d ? { ...clone(NEW_GAME), ...d } : null;
+}
+
+// ---- 探索中の状態（階層・位置・時刻・HP・魔物など）
+export function saveRunState(state) {
+  backend.set(RUN_KEY, JSON.stringify(state));
+}
+export function loadRunState() {
+  return loadJSON(RUN_KEY);
+}
+
+// 探索が終わったら両方消す
+export function clearRun() {
+  backend.remove(RUN_KEY);
+  backend.remove(PRE_RUN_KEY);
 }
 
 export function loadSettings(defaults) {

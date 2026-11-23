@@ -139,7 +139,7 @@ export const TIME = {
   cycleDays: 30,          // 地上ゲートの周期（CYCLE_DAYS。35 などに変更可）
   gateOpenHours: 6,       // 開放日の入場フェイズ（GATE_OPEN_DURATION）：0:00〜6:00
   entryHour: 3,           // 入場した時刻（入場フェイズ中）
-  secondsPerDay: 40,      // ゲーム内の 1 日が実時間で何秒か
+  secondsPerDay: 300,     // ゲーム内の 1 日が実時間で何秒か（5 分）
   closeDayBase: 7,        // 第 1 層の閉鎖日
   closeDayStep: 4,        // 1 層深くなるごとに閉鎖が何日遅いか
   campDays: 1,            // 野営 1 回で進む日数
@@ -338,7 +338,7 @@ export const NEW_GAME = {
   cycle: 1,           // 地上ゲートの何周期目か
   day: 1,             // 周期の何日目か（1 = 開放日）
   deepest: 1,         // 到達した最も深い階層
-  runInProgress: false, // 探索中か（探索中にアプリが終了した場合の判定に使う）
+  runInProgress: false, // 探索中か（探索中にアプリが終了した場合、次の起動で続きから再開する）
   runs: 0,
   clears: 0,
 };
