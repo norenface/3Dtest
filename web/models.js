@@ -267,11 +267,11 @@ export function makePortal(kind, closed = false) {
       bar.position.set(i * 0.28, 1.55, 0); g.add(bar);
     }
   } else {
-    // 渦（加算合成の円盤を 2 枚、両面から見える）
+    // 渦（加算合成の円盤を 2 枚、両面から見える）。霧の影響を受けないので、暗い所からでも光って見える（目印になる）
     swirl = new THREE.Group();
     for (const [r, o] of [[0.95, 0.55], [0.6, 0.8]]) {
       const disc = new THREE.Mesh(new THREE.CircleGeometry(r, 24),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: o, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: o, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
       swirl.add(disc);
     }
     swirl.position.y = 1.55;

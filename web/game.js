@@ -124,6 +124,168 @@ function seeded(seed) {
 }
 
 // arrive: 'start'（上から降りてきた／都市から入った）/ 'fromBelow'（下層から戻った）/ 'fromRift'（亀裂から戻った）
+// ====================================================================== ライトクリスタル（迷宮の明かり）
+// lighting.mode === 'crystal' の階層では、松明の代わりにクリスタルの周りだけが明るい。
+// 光源を数十個置くとスマホでは重いので、床・壁・天井の明るさはマスごとに前もって計算し（glowMap）、自己発光で表す。
+// 動く物（魔物・武器）を照らすため、プレイヤーに近いクリスタル 4 つにだけ本物の光源を置く。
+const CRYSTAL_REACH = 3;     // クリスタルの光が届くマス数（壁の向こうには届かない）
+const CRYSTAL_VIEW = 5;      // 見通しの計算で使うマス数（これより離れた所は暗黒地帯）
+// 明るさはマスごとの値を入れたテクスチャ（glowMap）から読む。壁の面は「面が向いている側の床のマス」の明るさになるので、
+// 暗黒地帯に面した壁は暗く、明るい通路に面した壁は明るい。床・天井は隣のマスとなめらかにつながる
+function glowMat(color, emissive, intensity, glowMap) {
+  const m = new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: intensity, flatShading: true, roughness: 0.9, metalness: 0 });
+  const grid = new THREE.Vector2(world.cols, world.rows);
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uGlowMap = { value: glowMap };
+    sh.uniforms.uGrid = { value: grid };
+    sh.uniforms.uTile = { value: T };
+    sh.vertexShader = 'varying vec3 vGlowPos;\nvarying vec3 vGlowN;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+  mat4 glowM = modelMatrix;
+  #ifdef USE_INSTANCING
+    glowM = modelMatrix * instanceMatrix;
+  #endif
+  vGlowPos = (glowM * vec4(transformed, 1.0)).xyz;
+  vGlowN = normalize(mat3(glowM) * objectNormal);`);
+    sh.fragmentShader = 'uniform sampler2D uGlowMap;\nuniform vec2 uGrid;\nuniform float uTile;\nvarying vec3 vGlowPos;\nvarying vec3 vGlowN;\n' +
+      sh.fragmentShader.replace('vec3 totalEmissiveRadiance = emissive;', `vec2 glowP = vGlowPos.xz + vGlowN.xz * (uTile * 0.5 - 0.02);
+  float glowV = texture2D(uGlowMap, (glowP / uTile + 0.5) / uGrid).r;
+  vec3 totalEmissiveRadiance = emissive * glowV;`);
+  };
+  m.customProgramCacheKey = () => 'crystal-glow';
+  return m;
+}
+function makeGlowMap(field) {
+  const data = new Uint8Array(world.rows * world.cols * 4);
+  for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
+    const i = (r * world.cols + c) * 4;
+    data[i] = Math.round(Math.min(1, field[r][c]) * 255);
+    data[i + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(data, world.cols, world.rows, THREE.RGBAFormat);
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+let glowTex = null;
+function glowTexture() {
+  if (glowTex) return glowTex;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const g = cv.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  glowTex = new THREE.CanvasTexture(cv);
+  return glowTex;
+}
+// 歩けるマスをたどって、クリスタルからの距離で明るさを決める（0〜1）
+function crystalField(crystals, reach) {
+  const f = Array.from({ length: world.rows }, () => new Float32Array(world.cols));
+  for (const [cr, cc] of crystals) {
+    const dist = new Map([[cr * 1000 + cc, 0]]);
+    const queue = [[cr, cc]];
+    while (queue.length) {
+      const [r, c] = queue.shift();
+      const d = dist.get(r * 1000 + c);
+      f[r][c] = Math.max(f[r][c], 1 - d / (reach + 0.6));
+      if (d >= reach) continue;
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nr = r + dr, nc = c + dc, k = nr * 1000 + nc;
+        if (isWallCell(nr, nc) || dist.has(k)) continue;
+        dist.set(k, d + 1);
+        queue.push([nr, nc]);
+      }
+    }
+  }
+  return f;
+}
+// プレイヤーのいる場所の見通し（0 = 暗黒地帯、1 = 明るい）
+function visibilityAt(pos) {
+  if (!world.vis) return 1;
+  const r = Math.round(pos.z / T), c = Math.round(pos.x / T);
+  return world.vis[r]?.[c] ?? 0;
+}
+
+function buildCrystals(root, crystals, rnd, L) {
+  const shardGeo = new THREE.OctahedronGeometry(0.5, 0);
+  const shardMat = new THREE.MeshBasicMaterial({ color: L.crystalColor });
+  const shards = new THREE.InstancedMesh(shardGeo, shardMat, crystals.length * 4);
+  const tmp = new THREE.Object3D();
+  const up = new THREE.Vector3(0, 1, 0);
+  const glowPos = [];
+  world.crystalPoints = [];
+  let n = 0;
+  for (const [r, c] of crystals) {
+    const p = cellCenter(r, c);
+    const walls = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dr, dc]) => isWallCell(r + dr, c + dc));
+    const kind = rnd();
+    let base, dir;
+    if (kind < 0.35 && walls.length) {
+      // 壁に付いている
+      const [dr, dc] = walls[Math.floor(rnd() * walls.length)];
+      base = new THREE.Vector3(p.x + dc * (T / 2 - 0.05), 1.4 + rnd() * 1.0, p.z + dr * (T / 2 - 0.05));
+      dir = new THREE.Vector3(-dc, 0.35, -dr).normalize();
+    } else if (kind < 0.65) {
+      // 天井から下がっている
+      base = new THREE.Vector3(p.x + (rnd() - 0.5) * 2, D.WALL_HEIGHT - 0.05, p.z + (rnd() - 0.5) * 2);
+      dir = new THREE.Vector3(0, -1, 0);
+    } else {
+      // 床から生えている
+      base = new THREE.Vector3(p.x + (rnd() - 0.5) * 2, 0, p.z + (rnd() - 0.5) * 2);
+      dir = up.clone();
+    }
+    for (let k = 0; k < 4; k++) {
+      const len = 0.5 + rnd() * 0.7 * (k === 0 ? 1.6 : 1);
+      const d = dir.clone().add(new THREE.Vector3((rnd() - 0.5) * 0.9, (rnd() - 0.5) * 0.5, (rnd() - 0.5) * 0.9)).normalize();
+      tmp.quaternion.setFromUnitVectors(up, d);
+      tmp.scale.set(0.28 + rnd() * 0.12, len * 2, 0.28 + rnd() * 0.12);
+      tmp.position.copy(base).addScaledVector(d, len * 0.5).add(new THREE.Vector3((rnd() - 0.5) * 0.3, 0, (rnd() - 0.5) * 0.3));
+      tmp.updateMatrix();
+      shards.setMatrixAt(n++, tmp.matrix);
+    }
+    const center = base.clone().addScaledVector(dir, 0.5);
+    glowPos.push(center.x, center.y, center.z);
+    world.crystalPoints.push(center);
+  }
+  root.add(shards);
+  // ほのかな光のにじみ
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.Float32BufferAttribute(glowPos, 3));
+  const halo = new THREE.Points(pg, new THREE.PointsMaterial({
+    size: 3.4, map: glowTexture(), color: L.crystalColor, transparent: true, opacity: 0.75,
+    depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true,
+  }));
+  root.add(halo);
+  // 本物の光源（プレイヤーに近いクリスタルへ移し替えて使う）
+  world.torchLights = [];
+  for (let i = 0; i < 4; i++) {
+    const l = new THREE.PointLight(L.crystalColor, 0, 12, 1.6);
+    root.add(l);
+    world.torchLights.push({ light: l, base: 10, flame: null });
+  }
+  world.crystalLightTimer = 0;
+}
+
+// プレイヤーに近いクリスタル 4 つに光源を置く
+function updateCrystalLights(dt) {
+  if (!world.crystalPoints?.length) return;
+  world.crystalLightTimer -= dt;
+  if (world.crystalLightTimer > 0) return;
+  world.crystalLightTimer = 0.3;
+  const near = world.crystalPoints
+    .map(p => [p, (p.x - player.pos.x) ** 2 + (p.z - player.pos.z) ** 2])
+    .sort((a, b) => a[1] - b[1]).slice(0, world.torchLights.length);
+  world.torchLights.forEach((t, i) => {
+    const p = near[i];
+    if (!p || p[1] > 24 * 24) { t.light.visible = false; return; }
+    t.light.visible = true;
+    t.light.position.copy(p[0]);
+  });
+}
+
 // restore: オートセーブから再開するときの状態（門・魔物・落ちている物・プレイヤーの位置をそのまま戻す）
 function buildFloor(floorDef, arrive = 'start', restore = null) {
   if (world.root) scene.remove(world.root);
@@ -144,9 +306,13 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   const rnd = seeded(floorDef.id * 7919);
   const L = floorDef.lighting;
 
+  const crystalMode = L.mode === 'crystal';
   scene.background = new THREE.Color(L.fog);
-  scene.fog = new THREE.Fog(L.fog, 14, 42);
+  scene.fog = new THREE.Fog(L.fog, 14, crystalMode ? L.litFog : 42);
   root.add(new THREE.HemisphereLight(L.ambient, 0x10100c, L.ambientIntensity));
+  world.vis = null;
+  world.crystalPoints = null;
+  world.inDark = false;
 
   // 床（インスタンス描画）
   const floorCells = [], wallCells = [];
@@ -168,20 +334,26 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
       }
     }
   }
+  let crystals = [], glowMap = null;
+  if (crystalMode) {
+    crystals = floorCells.filter(([r, c]) => world.grid[r][c] === 'C');
+    glowMap = makeGlowMap(crystalField(crystals, CRYSTAL_REACH));
+    world.vis = crystalField(crystals, CRYSTAL_VIEW);
+  }
   const tmp = new THREE.Object3D();
   const col = new THREE.Color();
-  const floorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.2, T), flatMat(0xffffff, { roughness: 0.95 }), floorCells.length);
+  const floorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.2, T), crystalMode ? glowMat(0x1a2440, 0x2c6cc4, 0.75, glowMap) : flatMat(0xffffff, { roughness: 0.95 }), floorCells.length);
   floorCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, -0.1, r * T); tmp.rotation.set(0, 0, 0); tmp.scale.set(1, 1, 1); tmp.updateMatrix();
     floorMesh.setMatrixAt(i, tmp.matrix);
-    const v = 0.34 + rnd() * 0.08;
+    const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.34 + rnd() * 0.08;
     floorMesh.setColorAt(i, col.setRGB(v * 1.02, v, v * 0.92));
   });
   floorMesh.receiveShadow = true;
   root.add(floorMesh);
 
   // 床の継ぎ目（石畳っぽく見せる細い溝）
-  const seamMat = flatMat(0x1c1b1a);
+  const seamMat = flatMat(crystalMode ? 0x0b1428 : 0x1c1b1a);
   const seamGeoX = new THREE.BoxGeometry(T, 0.02, 0.06), seamGeoZ = new THREE.BoxGeometry(0.06, 0.02, T);
   const seams = new THREE.InstancedMesh(seamGeoX, seamMat, floorCells.length * 2);
   const seamsZ = new THREE.InstancedMesh(seamGeoZ, seamMat, floorCells.length * 2);
@@ -194,12 +366,12 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   root.add(seams, seamsZ);
 
   // 壁（インスタンス描画。少しずつ色と高さを変えて石積みらしく）
-  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, D.WALL_HEIGHT, T), flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
+  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, D.WALL_HEIGHT, T), crystalMode ? glowMat(0x3c64a6, 0x5aa6ff, 0.65, glowMap) : flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
   wallCells.forEach(([r, c], i) => {
     const hy = 1 + (rnd() - 0.5) * 0.08;
     tmp.position.set(c * T, D.WALL_HEIGHT * hy / 2, r * T); tmp.scale.set(1, hy, 1); tmp.updateMatrix();
     wallMesh.setMatrixAt(i, tmp.matrix);
-    const v = 0.28 + rnd() * 0.07;
+    const v = crystalMode ? 0.85 + rnd() * 0.3 : 0.28 + rnd() * 0.07;
     wallMesh.setColorAt(i, col.setRGB(v, v * 0.96, v * 0.9));
   });
   tmp.scale.set(1, 1, 1);
@@ -209,11 +381,11 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   world.wallMesh = wallMesh;
 
   // 天井（一人称視点では見上げると見える）
-  const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), flatMat(0xffffff, { roughness: 1 }), floorCells.length);
+  const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), crystalMode ? glowMat(0x101830, 0x234f94, 0.55, glowMap) : flatMat(0xffffff, { roughness: 1 }), floorCells.length);
   floorCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, D.WALL_HEIGHT + 0.15, r * T); tmp.updateMatrix();
     ceil.setMatrixAt(i, tmp.matrix);
-    const v = 0.16 + rnd() * 0.04;
+    const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.16 + rnd() * 0.04;
     ceil.setColorAt(i, col.setRGB(v, v * 0.97, v * 0.93));
   });
   ceil.receiveShadow = true;
@@ -223,10 +395,10 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   floorCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, D.WALL_HEIGHT - 0.15, r * T - T / 2); tmp.updateMatrix(); beams.setMatrixAt(i, tmp.matrix);
   });
-  root.add(beams);
+  if (!crystalMode) root.add(beams);   // 水晶の迷宮には木の梁はない
 
   // 壁の上端の縁取り（輪郭をわかりやすくする）
-  const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(0x77705f), wallCells.length);
+  const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(crystalMode ? 0x26385a : 0x77705f), wallCells.length);
   wallCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, D.WALL_HEIGHT + 0.07, r * T); tmp.updateMatrix(); capMesh.setMatrixAt(i, tmp.matrix);
   });
@@ -246,7 +418,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
         ring.position.set(p.x, y, p.z); root.add(ring);
       }
       world.pillars.push({ x: p.x, z: p.z, r: 0.75 });
-    } else if (rnd() < 0.18 && ch === '.') {
+    } else if (!crystalMode && rnd() < 0.18 && ch === '.') {
       for (let k = 0; k < 3; k++) {
         const s = 0.15 + rnd() * 0.3;
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), flatMat(0x4c4842));
@@ -257,8 +429,10 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     }
   }
 
-  // 松明（光源は数を固定する：見た目だけの松明と、光る松明を分ける）
+  // 松明（光源は数を固定する：見た目だけの松明と、光る松明を分ける）。水晶の迷宮では松明の代わりにライトクリスタル
+  if (crystalMode) buildCrystals(root, crystals, rnd, L);
   const torchCandidates = [];
+  if (!crystalMode) {
   for (const [r, c] of wallCells) {
     for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       if (!isWallCell(r + dr, c + dc)) torchCandidates.push([r, c, dr, dc]);
@@ -282,6 +456,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     root.add(l);
     return { light: l, base: 14, flame: t.flame };
   });
+  }
 
   // 門（候補地点ごとに出現率で決める）
   const depthFloor = d => D.FLOORS.find(f => !f.isSpecialRift && f.depth === d);
@@ -311,13 +486,16 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   if (floorDef.isSpecialRift && near('back')) sp = near('back').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
   player.pos.copy(sp);
   player.facing = Math.PI;  // +Z 方向（ダンジョンの奥）を向く
+  if (arrive === 'start' && floorDef.startFacing === 'north') player.facing = 0;   // -Z（マップの上＝北）
   if (restore) { player.pos.set(restore.player.x, 0, restore.player.z); player.facing = restore.player.yaw; }
   collide(player.pos, 0.45);
   camState.yaw = player.facing;
   camState.pitch = -0.08;
 
   // プレイヤーの松明（影を落とす唯一の光源）
-  const torch = new THREE.PointLight(0xffc27a, 16, 18, 1.5);
+  // 水晶の迷宮では手元を照らす程度（暗黒地帯では先が見えない）
+  world.torchBase = crystalMode ? 4 : 14;
+  const torch = new THREE.PointLight(0xffc27a, world.torchBase, crystalMode ? 8 : 18, 1.5);
   torch.castShadow = settings.quality === 'high';
   torch.shadow.mapSize.set(512, 512);
   torch.shadow.bias = -0.002;
@@ -347,7 +525,10 @@ function addPortal(kind, [r, c], target, rot = null) {
   const model = makePortal(kind, closed);
   const pos = cellCenter(r, c);
   model.group.position.copy(pos);
-  model.group.rotation.y = rot ?? (Math.random() < 0.5 ? 0 : Math.PI / 2);
+  // 門は通路の向きに合わせる（南北に開いていれば南北を向く。行き止まりの切れ込みでは開いた側を向く）
+  const openNS = !isWallCell(r - 1, c) || !isWallCell(r + 1, c), openEW = !isWallCell(r, c - 1) || !isWallCell(r, c + 1);
+  const auto = openNS && !openEW ? 0 : openEW && !openNS ? Math.PI / 2 : (Math.random() < 0.5 ? 0 : Math.PI / 2);
+  model.group.rotation.y = rot ?? auto;
   world.root.add(model.group);
   world.portals.push({ kind, pos, model, target, closed, cell: [r, c] });
   // 門の柱にぶつかるようにする（くぐる中央は通れる）
@@ -838,7 +1019,7 @@ function updatePlayer(dt) {
   // 松明は左手に持っている想定（目の少し左下）
   const lx = Math.cos(camState.yaw), lz = -Math.sin(camState.yaw);
   world.torch.position.set(player.pos.x - lx * 0.4, 1.9, player.pos.z - lz * 0.4);
-  world.torch.intensity = 14 + Math.sin(world.clock * 13) * 1.0 + Math.sin(world.clock * 7.3) * 0.8;
+  world.torch.intensity = world.torchBase + Math.sin(world.clock * 13) * 1.0 + Math.sin(world.clock * 7.3) * 0.8;
   vmLight.intensity = 3 + Math.sin(world.clock * 13) * 0.3;
 }
 
@@ -1031,6 +1212,7 @@ function updatePickups(dt) {
     sw.children[0].material.opacity = 0.45 + Math.sin(world.clock * 3) * 0.15;
   }
   for (const t of world.torchLights) {
+    if (!t.flame) { t.light.intensity = t.base + Math.sin(world.clock * 1.7 + t.light.position.x) * 1.2; continue; }   // クリスタルはゆっくり明滅
     t.light.intensity = t.base + Math.sin(world.clock * 11 + t.light.position.x) * 2 + Math.sin(world.clock * 17.3) * 1.2;
     t.flame.scale.y = 1 + Math.sin(world.clock * 15 + t.light.position.z) * 0.15;
   }
@@ -1129,6 +1311,20 @@ function camp() {
 }
 
 function updateCamera(dt) {
+  // 水晶の迷宮：いる場所の明るさで見通しが変わる（暗黒地帯では数 m 先しか見えない）
+  if (world.vis && scene.fog) {
+    const L = world.floor.lighting;
+    const v = visibilityAt(player.pos);
+    const far = L.darkFog + (L.litFog - L.darkFog) * Math.min(1, v * 1.8);
+    scene.fog.far += (far - scene.fog.far) * Math.min(1, dt * 2.5);
+    scene.fog.near = scene.fog.far * 0.2;
+    const dark = v < 0.05;
+    if (world.state === 'playing' && dark !== world.inDark) {
+      world.inDark = dark;
+      if (dark) log('暗黒地帯に入った。先が見通せない。');
+    }
+  }
+  updateCrystalLights(dt);
   // 力尽きたら視点が床に崩れ落ちる
   const targetEye = player.dead ? 0.35 : camState.eye;
   camState.eyeNow = camState.eyeNow ?? targetEye;
