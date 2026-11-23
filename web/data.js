@@ -309,6 +309,8 @@ export const HUB = {
   stonePrice: 10,                 // 魔石 1 個の買取価格（ゴールド）
   potion: { name: '回復薬', description: '最大 HP の 50% を回復する。迷宮で R キー／回復ボタン。', price: 30, heal: 0.5, max: 3, cooldown: 1.0 },
   oblivion: { name: '忘却の霊薬', description: '吸収した精髄を 1 つ魂から取り除く。とても貴重。', price: 400 },
+  // 迷宮から地上へ戻る手段は「階層の閉鎖」「力尽きる（出発前に戻る）」と、この巻物のような特殊な効果だけ
+  returnScroll: { name: '帰還の巻物', description: '迷宮の中で読むと、その場から地上へ帰還できる（魔石は持ち帰れる）。近くに魔物がいると読めない。', price: 250, max: 1 },
   // 装備：level 0 が初期装備。購入すると次の段階へ強化される
   weapons: [
     { name: '鉄の大剣', price: 0, attackBonus: 0 },
@@ -331,6 +333,7 @@ export const NEW_GAME = {
   skillSlots: [],     // セットしたスキル ID（最大 MAX_SKILL_SLOTS）
   potions: 1,
   oblivion: 0,        // 忘却の霊薬の所持数
+  returnScrolls: 0,   // 帰還の巻物の所持数
   weaponLevel: 0,
   armorLevel: 0,
   lore: [],           // 読めるようになった古文書 ID

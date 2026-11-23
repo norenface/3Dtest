@@ -1447,13 +1447,28 @@ function openMenu() {
       <button class="btn primary" id="btn-resume">探索に戻る</button>
       <button class="btn" id="btn-camp" ${enemiesNearby() || !world.time.flows(world.floor) ? 'disabled' : ''}>野営して時間を進める（${D.TIME.campDays} 日・HP 回復）${enemiesNearby() ? ' — 近くに魔物がいる' : ''}</button>
       <button class="btn" id="btn-menu-quality">画質：${settings.quality === 'high' ? '高' : '低'}（切り替え）</button>
-      <button class="btn danger" id="btn-giveup">探索を放棄する（魔石を失い、この層の閉鎖日に地上へ戻る）</button>
-    </div>`;
+      <button class="btn" id="btn-return" ${save.returnScrolls > 0 && !enemiesNearby() ? '' : 'disabled'}>${D.HUB.returnScroll.name}を読んで地上へ帰還する（所持 ${save.returnScrolls}）${save.returnScrolls > 0 && enemiesNearby() ? ' — 近くに魔物がいる' : ''}</button>
+    </div>
+    <div class="muted" style="margin-top:8px;font-size:13px">迷宮から出られるのは、この層が閉ざされたとき・力尽きたとき（出発前に戻る）・帰還の巻物などの特殊な効果を受けたときだけ。</div>`;
   show('#menu-screen');
   $('#btn-resume').onclick = closeModal;
   $('#btn-camp').onclick = camp;
   $('#btn-menu-quality').onclick = () => { toggleQuality(); openMenu(); };
-  $('#btn-giveup').onclick = () => endRun('giveup');
+  $('#btn-return').onclick = () => useReturnScroll();
+}
+
+// 特殊な効果で地上へ帰還する。帰還の魔法などを追加するときも returnToSurface(名前) を呼ぶ
+function returnToSurface(source) {
+  if (world.state === 'result' || player.dead) return;
+  closeModal();
+  fadeTransition(() => endRun('return', source));
+}
+
+function useReturnScroll() {
+  if (save.returnScrolls <= 0) return;
+  if (enemiesNearby()) { log('近くに魔物がいて、巻物を読めない。'); return; }
+  save.returnScrolls--;
+  returnToSurface(D.HUB.returnScroll.name);
 }
 
 function toggleQuality() {
@@ -1462,7 +1477,8 @@ function toggleQuality() {
   applyQuality();
 }
 
-function endRun(reason) {
+// reason: 'closure'（階層の閉鎖で送還） / 'dead'（力尽きた：出発前に戻る） / 'return'（帰還の巻物・魔法などの特殊な効果。source に名前）
+function endRun(reason, source = '') {
   if (world.state === 'result') return;
   world.state = 'result';
   releasePointer();
@@ -1486,12 +1502,10 @@ function endRun(reason) {
     note = pre ? `迷宮に入る直前（第${save.cycle}周期 Day ${save.day}）に戻った。所持品・装備・精髄・ステータスは出発前の状態になった。`
       : 'この探索で得た魔石はすべて失われた。';
   }
-  if (reason === 'giveup') {
-    // あきらめても、いる層が閉ざされるまでは地上に戻れない（閉鎖日まで迷宮で過ごした扱い）
-    const cd = closeDayOf(floorDef.isSpecialRift ? floorConfig(world.riftReturn ?? 1) : floorDef);
-    if (cd !== null && world.time.day < cd) world.time.start(cd, 0);
-    kept = 0; title = '探索を放棄した'; cls = 'ng';
-    note = `この探索で得た魔石は失われた。${world.time.day} 日目に層が閉ざされるまで、迷宮をさまよった。`;
+  if (reason === 'return') {
+    title = `帰還（${source}）`;
+    note = `${world.time.day} 日目、${source}の力で地上へ戻った。持ち帰った魔石をすべて手に入れた。`;
+    save.clears++;
   }
   save.stones += kept;
   save.runs++;
@@ -1644,6 +1658,7 @@ window.game = {
   usePortal,
   camp,
   autosave,
+  useReturnScroll,
   get runState() { return Store.loadRunState(); },
   get preRun() { return Store.loadPreRun(); },
   forceDrops(on = true) { world.forceDrops = on; },

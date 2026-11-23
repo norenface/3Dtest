@@ -73,7 +73,7 @@ function render() {
       <div><h2 style="margin:0">${D.HUB.name}</h2><div class="muted">迷宮の入口にある宿場町</div></div>
       <div class="hub-wallet">
         <div>ゴールド <b data-test="gold">${s.gold}</b> G</div>
-        <div class="muted">魔石 ${s.stones} ／ 回復薬 ${s.potions} ／ 霊薬 ${s.oblivion}</div>
+        <div class="muted">魔石 ${s.stones} ／ 回復薬 ${s.potions} ／ 巻物 ${s.returnScrolls} ／ 霊薬 ${s.oblivion}</div>
       </div>
     </div>
     ${calendarHTML(s)}
@@ -122,6 +122,8 @@ function renderTab(s) {
       ${nextA
         ? row(`防具：${a[s.armorLevel].name} → ${nextA.name}`, `最大HP +${nextA.hpBonus}、受けるダメージ ${Math.round((1 - nextA.damageTakenMultiplier) * 100)}% 減`, nextA.price, 'buyArmor', s.gold >= nextA.price, '強化')
         : row(`防具：${a[s.armorLevel].name}`, 'これ以上は強化できない。', null, 'none', false, '最大')}
+      ${row(`${H.returnScroll.name}（所持 ${s.returnScrolls}/${H.returnScroll.max}）`, H.returnScroll.description, H.returnScroll.price, 'buyReturnScroll',
+        s.gold >= H.returnScroll.price && s.returnScrolls < H.returnScroll.max)}
       ${row(`${H.oblivion.name}（所持 ${s.oblivion}）`, H.oblivion.description + '「精髄」タブで使う。', H.oblivion.price, 'buyOblivion', s.gold >= H.oblivion.price)}`;
   }
   if (tab === 'essence') {
@@ -198,6 +200,9 @@ function act(name, arg) {
     }
     case 'buyPotion':
       if (s.gold >= H.potion.price && s.potions < H.potion.max) { s.gold -= H.potion.price; s.potions++; note = `${H.potion.name}を買った。`; }
+      break;
+    case 'buyReturnScroll':
+      if (s.gold >= H.returnScroll.price && s.returnScrolls < H.returnScroll.max) { s.gold -= H.returnScroll.price; s.returnScrolls++; note = `${H.returnScroll.name}を買った。`; }
       break;
     case 'buyWeapon': {
       const next = H.weapons[s.weaponLevel + 1];
