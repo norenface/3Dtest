@@ -69,7 +69,8 @@ export class Input {
 
   // 毎フレーム呼ぶ：キーボードの押下状態から move / dash を作る
   update(dt) {
-    if (!this.stick.id) {
+    // スティックを触っていないときだけキーボードから作る（タッチの ID は 0 のことがあるので null と比べる）
+    if (this.stick.id === null) {
       let x = 0, y = 0;
       if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) y += 1;
       if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) y -= 1;
@@ -197,8 +198,11 @@ export class Input {
           const len = Math.hypot(dx, dy);
           if (len > R) { dx = dx / len * R; dy = dy / len * R; }
           this.stick.x = dx / R; this.stick.y = dy / R;
-          this.move.x = this.stick.x;
-          this.move.y = -this.stick.y;
+          // 少し倒しただけで十分な速さが出るようにする（中心付近は遊び、6 割ほど倒せば全速）
+          const m = Math.hypot(this.stick.x, this.stick.y);
+          const k = m < 0.12 ? 0 : Math.min(1, (m - 0.12) / 0.48) / m;
+          this.move.x = this.stick.x * k;
+          this.move.y = -this.stick.y * k;
           this._updateStickView();
         } else if (t.identifier === this.lookTouch.id) {
           this.lookDelta -= (t.clientX - this.lookTouch.x) * 0.006;

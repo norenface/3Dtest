@@ -1779,7 +1779,8 @@ function releasePointer() {
 // ====================================================================== メインループ
 let last = performance.now();
 function frame(now) {
-  const rawDt = Math.min(0.05, (now - last) / 1000);
+  // 重い端末でフレームが遅れても、ゲームの速さが落ちすぎないよう 0.1 秒まで受け付ける
+  const rawDt = Math.min(0.1, (now - last) / 1000);
   last = now;
   step(rawDt);
   renderer.autoClear = true;
