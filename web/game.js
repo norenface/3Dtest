@@ -539,7 +539,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   // モンスター
   if (restore) {
     for (const m of restore.monsters) {
-      const mon = spawnMonster(m.id, new THREE.Vector3(m.x, 0, m.z));
+      const mon = spawnMonster(m.id, new THREE.Vector3(m.x, 0, m.z), !!m.boss);
       mon.home.set(m.hx, 0, m.hz);
       mon.hp = Math.min(mon.maxHp, m.hp);
     }
@@ -548,7 +548,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   } else {
     for (const [r, c] of floorCells) {
       const id = floorDef.monsterTable[world.grid[r][c]];
-      if (id) spawnMonster(id, cellCenter(r, c));
+      if (id) spawnMonster(id, cellCenter(r, c), world.grid[r][c] === floorDef.bossMonster);
     }
   }
 }
@@ -597,10 +597,16 @@ function refreshStats(keepRatio = true) {
 }
 
 // ====================================================================== モンスター
-function spawnMonster(id, pos) {
-  const def = D.MONSTERS[id];
-  const scale = world.floor.monsterScale ?? { hp: 1, attack: 1, stones: 1 };
+// boss: 亀裂の主（D.BOSS の倍率で強く・大きくなり、精髄を BOSS.essenceChance の確率で落とす）
+function spawnMonster(id, pos, boss = false) {
+  const B = D.BOSS;
+  const base = D.MONSTERS[id];
+  const def = boss ? { ...base, name: `${B.title}（${base.name}）`, radius: base.radius * B.size, attackRange: base.attackRange * B.size,
+    knockbackResist: Math.max(base.knockbackResist, 0.9) } : base;
+  const s0 = world.floor.monsterScale ?? { hp: 1, attack: 1, stones: 1 };
+  const scale = boss ? { hp: s0.hp * B.hp, attack: s0.attack * B.attack, stones: s0.stones * B.stones } : s0;
   const model = makeMonster(def.model);
+  if (boss) model.group.scale.setScalar(B.size);
   // 被弾時に個体ごと光らせるため、マテリアルを複製する
   const mats = [];
   model.group.traverse(o => {
@@ -616,7 +622,9 @@ function spawnMonster(id, pos) {
     def, model, mats, bar,
     pos: pos.clone(), home: pos.clone(), vel: new THREE.Vector3(), facing: Math.random() * Math.PI * 2,
     hp: Math.round(def.hp * scale.hp), maxHp: Math.round(def.hp * scale.hp),
-    attack: Math.round(def.attack * scale.attack), stones: Math.round(def.stones * scale.stones), dropBonus: scale.dropBonus ?? 0,
+    attack: Math.round(def.attack * scale.attack),
+    stones: Math.max(1, Math.round(def.stones * scale.stones)),   // 魔石は必ず落とす（強いほど多い）
+    boss,
     state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10, stun: 0,
     path: null, pathTimer: 0, aggro: false, wanderTarget: null, deadTimer: 0,
   };
@@ -909,8 +917,10 @@ function killMonster(m) {
     placeStone(m.pos.x + Math.cos(a) * 0.6, m.pos.z + Math.sin(a) * 0.6);
   }
   // 精髄
+  // 精髄はまれにしか落ちない（亀裂の主は BOSS.essenceChance）
   for (const drop of m.def.drops) {
-    if (Math.random() < drop.chance + m.dropBonus || world.forceDrops) dropEssence(drop.essence, m.pos);
+    const chance = m.boss ? D.BOSS.essenceChance : drop.chance;
+    if (Math.random() < chance || world.forceDrops) dropEssence(drop.essence, m.pos);
   }
 }
 
@@ -1565,7 +1575,7 @@ function runSnapshot() {
     player: { x: player.pos.x, z: player.pos.z, yaw: camState.yaw, hp: player.hp, stamina: player.stamina, cooldowns: player.skillCooldowns },
     portals: world.portals.map(p => ({ kind: p.kind, cell: p.cell, target: p.target, rot: p.model.group.rotation.y })),
     monsters: world.monsters.filter(m => m.state !== 'dead')
-      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp })),
+      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss })),
     orbs: world.orbs.map(o => ({ id: o.id, x: o.pos.x, z: o.pos.z })),
     stones: world.stones.map(st => [st.pos.x, st.pos.z]),
   };
@@ -1919,6 +1929,7 @@ window.game = {
   get runState() { return Store.loadRunState(); },
   get preRun() { return Store.loadPreRun(); },
   forceDrops(on = true) { world.forceDrops = on; },
+  kill(m) { if (m.state !== 'dead') killMonster(m); },
   attack() { input.pressed.add('attack'); },
   interact() { input.pressed.add('interact'); },
   stats() { return computeStats(); },

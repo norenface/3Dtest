@@ -104,7 +104,9 @@ export const ESSENCES = {
 };
 
 // ------------------------------------------------------------------ モンスター
-// model: game の models.js で使う見た目の種類 / drops: 精髄のドロップ率
+// model: game の models.js で使う見た目の種類
+// stones: 倒したときに必ず落とす魔石の数（強い魔物ほど多い。階層の monsterScale.stones を掛ける）
+// drops: 精髄のドロップ率。精髄はまず落ちないレア（通常の魔物は 0.1〜1%）。亀裂の主（ボス）は BOSS.essenceChance で落とす
 export const MONSTERS = {
   goblin: {
     id: 'goblin', name: 'ゴブリン', model: 'goblin',
@@ -112,7 +114,7 @@ export const MONSTERS = {
     aggroRange: 11, attackRange: 1.6, windup: 0.45, attackCooldown: 1.2,
     radius: 0.45, knockbackResist: 0,
     stones: 1,
-    drops: [{ essence: 'essence_goblin', chance: 0.55 }],
+    drops: [{ essence: 'essence_goblin', chance: 0.01 }],    // 1%
   },
   wolf: {
     id: 'wolf', name: 'ダイアウルフ', model: 'wolf',
@@ -120,7 +122,7 @@ export const MONSTERS = {
     aggroRange: 14, attackRange: 1.9, windup: 0.35, attackCooldown: 1.0,
     radius: 0.55, knockbackResist: 0.2,
     stones: 2,
-    drops: [{ essence: 'essence_wolf', chance: 0.45 }],
+    drops: [{ essence: 'essence_wolf', chance: 0.005 }],     // 0.5%
   },
   golem: {
     id: 'golem', name: 'ストーンゴーレム', model: 'golem',
@@ -128,9 +130,13 @@ export const MONSTERS = {
     aggroRange: 9, attackRange: 2.2, windup: 0.9, attackCooldown: 2.0,
     radius: 0.85, knockbackResist: 0.8,
     stones: 4,
-    drops: [{ essence: 'essence_golem', chance: 0.6 }],
+    drops: [{ essence: 'essence_golem', chance: 0.002 }],    // 0.2%
   },
 };
+
+// 亀裂の主（次元の亀裂にいるボス）。マップの X の場所に bossMonster が現れる。
+// 通常の個体より強く大きく、魔石を多く落とし、essenceChance の確率で精髄を落とす
+export const BOSS = { title: '亀裂の主', hp: 3.0, attack: 1.3, size: 1.4, stones: 3, essenceChance: 0.33 };
 
 // ------------------------------------------------------------------ 時間（迷宮の開閉・階層閉鎖のサイクル）
 // 地上ゲートは cycleDays 日ごとに開く。開放日（各周期の 1 日目）の 0:00〜gateOpenHours 時だけ入場できる。
@@ -159,6 +165,7 @@ export const TIME = {
 //   N 下層への門の候補地点 / U 上層への門の候補地点 / R 次元の亀裂の候補地点 / B 亀裂から元の階層へ戻る門
 //   C ライトクリスタル（迷宮の明かり。床・壁・天井のどこかに付き、通り抜けられる。周りが明るくなる）
 //   g ゴブリン / w ダイアウルフ / G ストーンゴーレム（の出現地点。足元は床）
+//   X 亀裂の主（ボス。bossMonster で指定した文字の場所の魔物がボスになる）
 // startFacing: 'north' なら到着時に北（マップの上）を向く
 // depth: 階層番号 N（閉鎖日の計算に使う） / closeDay: 指定すると閉鎖日を個別に上書き
 // nextPortalSpawnRate / prevPortalSpawnRate / riftPortalSpawnRate: 各候補地点に門が現れる確率
@@ -307,15 +314,16 @@ export const FLOORS = [
     nextPortalSpawnRate: 0, prevPortalSpawnRate: 0, riftPortalSpawnRate: 0,
     map: [
       '###########',
-      '#B...#...G#',
+      '#B...#...g#',
       '#....#....#',
       '#.w..P..w.#',
       '#.........#',
-      '#.G.....G.#',
+      '#.G..X..G.#',
       '###########',
     ],
-    monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
-    monsterScale: { hp: 2.2, attack: 1.8, stones: 3.0, dropBonus: 0.35 },
+    monsterTable: { g: 'goblin', w: 'wolf', G: 'golem', X: 'golem' },
+    bossMonster: 'X',      // X の場所の魔物は「亀裂の主」（BOSS）
+    monsterScale: { hp: 2.2, attack: 1.8, stones: 3.0 },
     lighting: { ambient: 0x7a3a6a, ambientIntensity: 2.4, fog: 0x0c040a, torchColor: 0xff5ad8 },
   },
 ];
@@ -336,7 +344,7 @@ export const LORE = [
           'ただし一度降りた者は、上の層が閉ざされた後には戻れない。早く帰りたければ、閉鎖の前に上層への門を探して戻ることだ。' },
   { id: 'lore_rift', title: '次元の亀裂', price: 150, unlock: { deepest: 3 },
     text: '第2層には、まれに空間の裂け目が口を開ける。裂け目の中では時が止まり、層の閉鎖も届かない。' +
-          '強い魔物がひしめくが、落とす精髄も多い。入口の門から元の層へ戻れる。' },
+          '強い魔物がひしめき、奥には亀裂の主が待つ。主はめったに出ない精髄を三度に一度は落とすという。入口の門から元の層へ戻れる。' },
   { id: 'lore_goblin', title: '小鬼の精髄', price: 60, unlock: { kills: 'goblin', count: 5 },
     text: '小鬼の精髄は器をほとんど使わない。器用さが増し、獲物から多くの魔石を剥ぎ取れるようになる。' +
           '急所突きは、ひるんだ相手にこそ真価を発揮する。' },
