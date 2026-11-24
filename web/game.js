@@ -379,12 +379,15 @@ function spawnGroup(region, r, c, count) {
     if (!isWallCell(rr, cc) && !'PTM'.includes(world.grid[rr][cc]) && !isSafeCell(rr, cc)) cells.push([rr, cc]);
   }
   const out = [];
+  const groupId = ++world.groupSeq;
+  const regionKey = world.regions?.[r]?.[c] ?? null;
   for (let i = 0; i < count; i++) {
     const [rr, cc] = cells[Math.floor(Math.random() * cells.length)] ?? [r, c];
     const p = cellCenter(rr, cc).add(new THREE.Vector3((Math.random() - 0.5) * 2.4, 0, (Math.random() - 0.5) * 2.4));
     const id = pickSpecies(region);
     const m = spawnMonster(id, p);
     m.home.copy(cellCenter(r, c));
+    m.groupId = groupId; m.regionKey = regionKey; m.packIndex = i; m.packSize = count;
     if (D.MONSTERS[id].grade <= 6 && region.monsters.find(e => e[0] === id)?.[2] === 'rare') log(`強大な気配……${D.MONSTERS[id].name}がどこかに現れた。`);
     out.push(m);
   }
@@ -414,6 +417,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   world.steles = [];
   world.projectiles = [];
   world.fieldKey = null;
+  world.groupSeq = 0;
+  world.reinforce = {};
   for (const el of document.querySelectorAll('.ebar')) el.remove();
   const rnd = seeded(floorDef.id * 7919 + (floorDef.generator ? (world.run?.seed ?? 1) : 0));
   const L = floorDef.lighting;
@@ -676,6 +681,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
       const mon = spawnMonster(m.id, new THREE.Vector3(m.x, 0, m.z), !!m.boss);
       mon.home.set(m.hx, 0, m.hz);
       mon.hp = Math.min(mon.maxHp, m.hp);
+      mon.regionKey = m.rk ?? null; mon.groupId = m.gid ?? 0; mon.packIndex = m.pi ?? 0; mon.packSize = m.ps ?? 1;
+      world.groupSeq = Math.max(world.groupSeq, mon.groupId);
     }
     for (const o of restore.orbs) placeOrb(o.id, o.x, o.z);
     for (const [x, z, grade] of restore.stones) placeStone(x, z, grade ?? 9);
@@ -1201,7 +1208,7 @@ function hitMonster(m, dmg, crit, nx, nz) {
   }
   m.hp -= dmg;
   m.flash = 0.12;
-  m.aggro = true;
+  if (!m.aggro) { m.aggro = true; onAggro(m); }
   const kb = 6 * (1 - m.def.knockbackResist);
   m.vel.x += nx * kb; m.vel.z += nz * kb;
   if (m.state === 'windup' && m.def.knockbackResist < 0.5) { m.state = 'recover'; m.timer = 0.4; } // 小型の敵は攻撃を中断される
@@ -1398,7 +1405,7 @@ function updateMonsters(dt) {
     if (far) continue;
     const playerSafe = isSafeCell(Math.round(player.pos.z / T), Math.round(player.pos.x / T));
     const sees = !playerSafe && dist < def.aggroRange && lineOfSight(m.pos, player.pos);
-    if (sees) m.aggro = true;
+    if (sees && !m.aggro) { m.aggro = true; onAggro(m); }
     if (m.aggro && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
     const prevX = m.pos.x, prevZ = m.pos.z;
     m.cooldown = Math.max(0, m.cooldown - dt);
@@ -1422,6 +1429,15 @@ function updateMonsters(dt) {
       case 'chase':
         if (m.aggro) {
           m.state = 'chase';
+          // 群れの魔物は、割り当てられた位置（標的の周り）に回り込んでから攻撃する（最大 3 秒）
+          const flank = flankPoint(m);
+          m.flankTime = (m.flankTime ?? 0) + dt;
+          const flanking = flank && m.flankTime < 3 && Math.hypot(flank.x - m.pos.x, flank.z - m.pos.z) > 1.0;
+          if (flanking) {
+            moveDir = new THREE.Vector3(flank.x - m.pos.x, 0, flank.z - m.pos.z).normalize();
+            m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * 8);
+            break;
+          }
           if (dist < def.attackRange && m.cooldown <= 0 && (!def.ranged || sees)) {
             m.state = 'windup'; m.timer = def.windup;
             break;
@@ -1440,8 +1456,11 @@ function updateMonsters(dt) {
           m.state = 'idle';
           // うろうろする
           if (!m.wanderTarget || m.pos.distanceTo(m.wanderTarget) < 0.5 || Math.random() < dt * 0.2) {
-            const a = Math.random() * Math.PI * 2, r = Math.random() * 3;
+            // 徘徊する魔物（roam）は広く歩き回る
+            const roam = world.floor.regions?.[m.regionKey]?.roam ?? 3;
+            const a = Math.random() * Math.PI * 2, r = Math.random() * roam;
             m.wanderTarget = new THREE.Vector3(m.home.x + Math.cos(a) * r, 0, m.home.z + Math.sin(a) * r);
+            if (cellAt(m.wanderTarget.x, m.wanderTarget.z) === '#') m.wanderTarget.copy(m.home);
           }
           const w = new THREE.Vector3(m.wanderTarget.x - m.pos.x, 0, m.wanderTarget.z - m.pos.z);
           if (w.length() > 0.3) { moveDir = w.normalize(); speedMul = 0.3; m.facing = turnToward(m.facing, Math.atan2(-w.x, -w.z), dt * 4); }
@@ -1490,6 +1509,61 @@ function updateMonsters(dt) {
 
     animateMonster(m, moveDir ? def.speed * speedMul : 0);
   }
+}
+
+// ====================================================================== 出現法則（群れ・リンク・巻き込み）
+// 魔物が戦闘に気づいたとき（onAggro）。地域の設定に応じて、ほかの魔物を呼び込む
+function alertMonster(o) {
+  if (o.state === 'dead' || o.aggro) return;
+  o.aggro = true;
+  o.flankTime = 0;   // 呼ばれた側からは、さらに呼び込まない（連鎖が階層中に広がらないように）
+}
+function onAggro(m) {
+  m.flankTime = 0;
+  const reg = world.floor.regions?.[m.regionKey];
+  if (!reg) return;
+  if (reg.pack) for (const o of world.monsters) if (o.groupId === m.groupId) alertMonster(o);
+  if (reg.assist) for (const o of world.monsters) if (o !== m && o.pos.distanceTo(m.pos) < reg.assist) alertMonster(o);
+  if (reg.link) {
+    for (const o of world.monsters) if (o.def.id === m.def.id && o.pos.distanceTo(m.pos) < reg.link.radius) alertMonster(o);
+    // 近くにリスポーンしていた別個体が、次々と集まってくる
+    if (!world.reinforce[m.regionKey]) {
+      world.reinforce[m.regionKey] = { id: m.def.id, left: reg.link.reinforce, timer: reg.link.interval, interval: reg.link.interval, idle: 0 };
+      log(`物音を聞きつけて、${m.def.name}が集まってくる……！`);
+    }
+  }
+}
+function updateReinforcements(dt) {
+  for (const [key, rf] of Object.entries(world.reinforce ?? {})) {
+    if (rf.left <= 0) continue;
+    // 戦闘が終わって（追ってくる魔物がいなくなって）しばらくしたら止まる
+    const fighting = world.monsters.some(o => o.state !== 'dead' && o.aggro);
+    rf.idle = fighting ? 0 : rf.idle + dt;
+    if (rf.idle > 8) { delete world.reinforce[key]; continue; }
+    rf.timer -= dt;
+    if (rf.timer > 0) continue;
+    rf.timer = rf.interval;
+    // プレイヤーから 10〜18m 離れた、見えない所に湧く
+    const pr = Math.round(player.pos.z / T), pc = Math.round(player.pos.x / T);
+    const cands = [];
+    for (let r = pr - 5; r <= pr + 5; r++) for (let c = pc - 5; c <= pc + 5; c++) {
+      if (isWallCell(r, c) || 'PTM'.includes(world.grid[r][c]) || isSafeCell(r, c) || world.layout.dark?.[r]?.[c]) continue;
+      const p = cellCenter(r, c), d = p.distanceTo(player.pos);
+      if (d >= 10 && d <= 18 && !lineOfSight(p, player.pos)) cands.push(p);
+    }
+    if (!cands.length) continue;
+    const m = spawnMonster(rf.id, cands[Math.floor(Math.random() * cands.length)]);
+    m.regionKey = key; m.aggro = true;
+    rf.left--;
+  }
+}
+// 群れの魔物は、標的を囲むように散って回り込む（離れているあいだだけ）
+function flankPoint(m) {
+  if (!world.floor.regions?.[m.regionKey]?.pack || m.packSize < 2) return null;
+  const a = m.packIndex / m.packSize * Math.PI * 2;
+  const rad = m.def.attackRange * 0.8;
+  const p = new THREE.Vector3(player.pos.x + Math.cos(a) * rad, 0, player.pos.z + Math.sin(a) * rad);
+  return cellAt(p.x, p.z) === '#' ? null : p;
 }
 
 // 遠距離攻撃（矢・魔法の弾）。まっすぐ飛び、プレイヤーに当たるか壁に当たると消える（よければ当たらない）
@@ -2093,7 +2167,7 @@ function runSnapshot() {
     player: { x: player.pos.x, z: player.pos.z, yaw: camState.yaw, hp: player.hp, stamina: player.stamina, cooldowns: player.skillCooldowns },
     portals: world.portals.map(p => ({ kind: p.kind, cell: p.cell, target: p.target, rot: p.model.group.rotation.y })),
     monsters: world.monsters.filter(m => m.state !== 'dead')
-      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss })),
+      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss, rk: m.regionKey ?? null, gid: m.groupId ?? 0, pi: m.packIndex ?? 0, ps: m.packSize ?? 1 })),
     orbs: world.orbs.map(o => ({ id: o.id, x: o.pos.x, z: o.pos.z })),
     stones: world.stones.map(st => [st.pos.x, st.pos.z, st.grade]),
   };
@@ -2373,6 +2447,7 @@ function step(dt) {
   }
   updateMonsters(dt);
   updateProjectiles(dt);
+  if (world.state === 'playing') updateReinforcements(dt);
   updatePickups(dt);
   updateParticles(dt);
   updatePopups(dt);
@@ -2460,6 +2535,7 @@ window.game = {
   kill(m) { if (m.state !== 'dead') killMonster(m); },
   spawn(id, x, z, boss = false) { return spawnMonster(id, new THREE.Vector3(x, 0, z), boss); },
   regionKeyAt, regionAt, isSafeCell, touchStele,
+  aggro(m) { if (!m.aggro) { m.aggro = true; onAggro(m); } },
   stoneCount, stoneValue,
   attack() { input.pressed.add('attack'); },
   interact() { input.pressed.add('interact'); },

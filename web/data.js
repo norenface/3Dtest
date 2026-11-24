@@ -277,12 +277,16 @@ export const FLOORS = [
       3: { target: 22, label: '南の門' },
       4: { target: 23, label: '西の門' },
     },
+    // 地域ごとの出現法則
+    //   pack: 群れで行動し、1 頭が気づくと群れ全体で襲ってくる。標的を囲い込むように回り込む
+    //   roam: 単体で広く徘徊する（m） / link: 戦闘の気配を察すると、近くの同種が集まり、さらに別個体が次々と湧いて加わる
+    //   assist: 戦闘が始まると、周囲（m）の魔物が種類を問わず巻き込まれて加わる（乱戦になりやすい）
     regions: {
-      north: { name: '北部', monsters: [['goblin', 1]], group: [3, 4] },
-      east: { name: '東部', monsters: [['wolf', 1]], group: [3, 4] },
-      south: { name: '南部', monsters: [['ghoul', 1]], group: [3, 4] },
-      west: { name: '西部', monsters: [['gnome', 1]], group: [3, 4] },
-      center: { name: '中心部', monsters: [['goblin', 1], ['wolf', 1], ['ghoul', 1], ['gnome', 1]], group: [3, 4] },
+      north: { name: '北部', monsters: [['goblin', 1]], group: [1, 2] },   // 単体か数匹。1 匹ずつおびき寄せやすい（初心者向けの狩場）
+      east: { name: '東部', monsters: [['wolf', 1]], group: [3, 5], pack: true },   // 基本は群れ。囲い込んでくる（1層で最も危険）
+      south: { name: '南部', monsters: [['ghoul', 1]], group: [1, 1], roam: 10, link: { radius: 18, reinforce: 3, interval: 6 } },
+      west: { name: '西部', monsters: [['gnome', 1]], group: [1, 1], roam: 10, link: { radius: 18, reinforce: 3, interval: 6 } },
+      center: { name: '中心部', monsters: [['goblin', 1], ['wolf', 1], ['ghoul', 1], ['gnome', 1]], group: [1, 2], assist: 10 },
       safe: { name: '記念碑の空洞（安全地帯）', monsters: [], safe: true },
     },
     // 特殊な条件：深淵の侵食（まれに、5 等級の深淵の個体が各地に現れる）

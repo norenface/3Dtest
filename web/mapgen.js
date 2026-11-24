@@ -114,7 +114,7 @@ function scatter(g, rnd, count, minGap, ok) {
 // 中央の空洞と記念碑の周りは安全地帯（魔物が入ってこない）。東西南北の腕の先に第2層への門（1 北 / 2 東 / 3 南 / 4 西）
 export function crystalCave(seed) {
   const rnd = seededRandom(seed);
-  const W = 35, H = 47, CR = 23, CC = 17;
+  const W = 35, H = 47, CR = 24, CC = 17;
   const inMask = (r, c) => (r >= 2 && r <= 44 && c >= 9 && c <= 25) || (r >= 16 && r <= 30 && c >= 1 && c <= 33);
   const g = makeGrid(H, W);
   const ring = new Set(), inner = new Set();
@@ -125,22 +125,35 @@ export function crystalCave(seed) {
     if (edge) g[r][c] = '.';
   }
   const isInner = (r, c) => inner.has(r + ',' + c);
-  // 迷路（行が奇数・列が奇数のマスが節点。外周とのあいだには 1 マスの壁が残る）
-  const node = (r, c) => isInner(r, c) && r % 2 === 1 && c % 2 === 1;
+  // 迷路（行が偶数・列が奇数のマスが節点）。迷路と外周（暗黒地帯）のあいだには必ず 1 マスの壁が残る
+  const node = (r, c) => isInner(r, c) && r % 2 === 0 && c % 2 === 1;
   carveMaze(g, [CR, CC], node, rnd, 0.1, 0.15);
-  // 迷路と外周をところどころつなぐ
+  // 暗黒地帯への入口：通路の突き当たりの壁を抜く。北・東・南・西の腕にそれぞれ 2 か所だけ
+  const entrances = [];
+  const armOf = (r, c) => r < 16 ? 'north' : r > 30 ? 'south' : c < 9 ? 'west' : c > 25 ? 'east' : null;
+  const cands = { north: [], east: [], south: [], west: [] };
   for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
     if (!node(r, c)) continue;
     for (const [dr, dc] of DIRS) {
       const mr = r + dr, mc = c + dc, fr = r + dr * 2, fc = c + dc * 2;
-      if (isInner(mr, mc) && g[mr][mc] === '#' && ring.has(fr + ',' + fc) && rnd() < 0.2) g[mr][mc] = '.';
+      const arm = armOf(r, c);
+      if (arm && isInner(mr, mc) && g[mr][mc] === '#' && ring.has(fr + ',' + fc)) cands[arm].push([mr, mc]);
     }
+  }
+  for (const list of Object.values(cands)) {
+    shuffle(list, rnd);
+    const chosen = [];
+    for (const p of list) {
+      if (chosen.length >= 2) break;
+      if (chosen.every(q => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) >= 8)) chosen.push(p);
+    }
+    for (const [r, c] of chosen) { g[r][c] = '.'; entrances.push([r, c]); }
   }
   // 中央の空洞（安全地帯）と記念碑
   for (let r = CR - 2; r <= CR + 2; r++) for (let c = CC - 2; c <= CC + 2; c++) g[r][c] = 'K';
   g[CR][CC] = 'M';
   // 東西南北の門（十字の腕の先の切れ込み）
-  const gates = { 1: [1, 17], 2: [23, 34], 3: [45, 17], 4: [23, 0] };
+  const gates = { 1: [1, 17], 2: [CR, 34], 3: [45, 17], 4: [CR, 0] };
   for (const [k, [r, c]] of Object.entries(gates)) g[r][c] = k;
   keepConnected(g, [CR, CC - 2]);
 
@@ -159,16 +172,19 @@ export function crystalCave(seed) {
   for (const [r, c] of crystalCells) g[r][c] = 'C';
   for (const [r, c] of [[CR - 2, CC - 2], [CR - 2, CC + 2], [CR + 2, CC - 2], [CR + 2, CC + 2]]) g[r][c] = 'C';
 
-  // 魔物の群れ：各地域に 2 か所、中心部に 2 か所（安全地帯と門のそばは避ける）
+  // 魔物の出現地点（安全地帯と門のそばは避ける）。数と間隔は地域ごと：
+  //   北（ゴブリン）は 1〜2 体ずつ多めの地点に散らばる / 東（刃狼）は群れの地点が少数 /
+  //   南（グール）・西（ノーム）は単体で徘徊する地点 / 中心部は種類の違う魔物が狭い範囲に密集する
   const far = (r, c) => Math.abs(r - CR) + Math.abs(c - CC) >= 6 && Object.values(gates).every(([gr, gc]) => Math.abs(gr - r) + Math.abs(gc - c) >= 4);
-  for (const reg of ['north', 'east', 'south', 'west', 'center']) {
-    for (const [r, c] of scatter(g, rnd, 2, 5, (r, c) => regions[r][c] === reg && isInner(r, c) && far(r, c))) g[r][c] = 'm';
+  const SPAWNS = { north: [5, 5], east: [2, 8], south: [5, 5], west: [5, 5], center: [6, 3] };   // [地点の数, 地点どうしの最小距離]
+  for (const [reg, [n, gap]] of Object.entries(SPAWNS)) {
+    for (const [r, c] of scatter(g, rnd, n, gap, (r, c) => regions[r][c] === reg && isInner(r, c) && far(r, c))) g[r][c] = 'm';
   }
   // 外周の回廊と門の切れ込みはすべて暗黒地帯（クリスタルの光が届かない）
   const dark = makeGrid(H, W, false);
   for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) if (ring.has(r + ',' + c) && g[r][c] !== '#') dark[r][c] = true;
   for (const [r, c] of Object.values(gates)) dark[r][c] = true;
-  return { map: toRows(g), regions, dark, arrivals: {}, prevCells: {} };
+  return { map: toRows(g), regions, dark, entrances, arrivals: {}, prevCells: {} };
 }
 
 // ====================================================================== 第2層の 4 つのエリア
