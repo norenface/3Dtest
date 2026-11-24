@@ -3,7 +3,7 @@
 import * as D from './data.js';
 import * as Store from './storage.js';
 import { GRADES, stoneCount, stoneValue } from './stones.js';
-import { isGateOpen, daysUntilGateOpens, isLateEntry, formatClock } from './time.js';
+import { isGateOpen, daysUntilGateOpens, isLateEntry, formatClock, closeLabel } from './time.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -64,15 +64,17 @@ function calendarHTML(s) {
   const T = D.TIME;
   const left = T.gateOpenHours - s.hour;
   const leftText = left >= 1 ? `${Math.floor(left)} 時間 ${Math.floor((left % 1) * 60)} 分` : `${Math.floor(left * 60)} 分`;
-  const floors = D.FLOORS.filter(f => !f.isSpecialRift)
-    .map(f => `第${f.depth}層 ${f.closeDay ?? T.closeDayBase + T.closeDayStep * (f.depth - 1)}日目`).join(' ／ ');
+  // 深さごとに 1 つ（第2層は 4 つのエリアとも同じ閉鎖時間）
+  const seen = new Set();
+  const floors = D.FLOORS.filter(f => !f.isSpecialRift && !f.test && !seen.has(f.depth) && seen.add(f.depth))
+    .map(f => `第${f.depth}層 ${closeLabel(f)}`).join(' ／ ');
   return `<div class="calendar ${open ? 'open' : 'closed'}" data-test="calendar" id="hub-calendar">
     <div><b>第${s.cycle}周期 Day ${s.day}${s.day === 1 ? ` <span data-test="clock">${formatClock(s.hour)}</span>` : ''}</b> <span class="muted">／ ${T.cycleDays} 日周期</span></div>
     <div>${open
       ? `地上ゲート：<b class="ok">開放中</b> — 閉じるまで あと ${leftText}（${String(T.gateOpenHours).padStart(2, '0')}:00 に閉門）`
       : `地上ゲート：<b class="ng">閉鎖中</b> — 次の開放日まで あと ${daysUntilGateOpens(s.day, s.hour)} 日`}</div>
     ${open && isLateEntry(s.hour) ? '<div class="warn-text" data-test="late">閉門間際：いま入ると、暗黒地帯に降り立ってしまうおそれがある</div>' : ''}
-    <div class="muted">階層の閉鎖日：${floors}</div>
+    <div class="muted">階層の閉鎖（突入から）：${floors}</div>
   </div>`;
 }
 

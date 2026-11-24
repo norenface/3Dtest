@@ -9,7 +9,8 @@ import * as Store from './storage.js';
 import { normalizeStones, addStone, mergeStones, stoneCount, stoneValue, bestGrade, stoneText, stoneGradeFor } from './stones.js';
 import { openHub, hubClockChanged } from './hub.js';
 import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makePortal, flatMat } from './models.js';
-import { TimeManager, floorConfig, closeDayOf, checkFloorClosure, formatRemaining, isGateOpen, isLateEntry, formatClock } from './time.js';
+import { GENERATORS } from './mapgen.js';
+import { TimeManager, floorConfig, closeHoursOf, closeLabel, checkFloorClosure, formatRemaining, isGateOpen, isLateEntry, formatClock } from './time.js';
 
 const $ = sel => document.querySelector(sel);
 const STAT_KEYS = ['STR', 'VIT', 'AGI', 'INT', 'MAG', 'MND'];
@@ -91,14 +92,16 @@ function computeStats() {
     meleeMultiplier: mult('', 'meleeDamageMultiplier'),
     damageTakenMultiplier: mult('', 'damageTakenMultiplier') * armor.damageTakenMultiplier,
     flinchMultiplier: mult('', 'flinchMultiplier'),
-    stoneGradeUpChance: extra('stoneGradeUpChance'),
+    extraStones: extra('extraStones'),
   };
 }
 
 // ====================================================================== ワールド
 const world = {
   floor: null, grid: [], rows: 0, cols: 0,
-  root: null, wallMesh: null, pillars: [], torch: null, exit: null,
+  root: null, wallMesh: null, pillars: [], pillarGrid: new Map(), torch: null, exit: null,
+  regions: null,             // マスごとの地域（生成マップ）
+  traps: new Map(), steles: [], projectiles: [],
   monsters: [], orbs: [], stones: [],
   time: new TimeManager(),   // ゲーム内の日時（迷宮の中で進む）
   portals: [],               // この階層の門
@@ -293,7 +296,7 @@ function chooseLanding(floorDef, late) {
   const avoid = [];
   for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
     const ch = world.grid[r][c];
-    if (floorDef.monsterTable[ch] || 'NURB'.includes(ch)) avoid.push([r, c]);
+    if (floorDef.monsterTable?.[ch] || 'mNURB1234'.includes(ch)) avoid.push([r, c]);
   }
   const lit = [], dark = [];
   for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
@@ -311,39 +314,129 @@ function chooseLanding(floorDef, late) {
   return { cell, dark: toDark, yaw: Math.atan2(-dc, -dr) };
 }
 
-// restore: オートセーブから再開するときの状態（門・魔物・落ちている物・プレイヤーの位置をそのまま戻す）
+// 階層のマップ：generator の階層は探索ごとの種から作る（同じ探索中は同じ地形）。固定マップの階層は map をそのまま使う
+function floorLayout(floorDef) {
+  if (floorDef.generator) {
+    const seed = (((world.run?.seed ?? 1) * 2654435761) ^ (floorDef.id * 7919)) >>> 0;
+    return GENERATORS[floorDef.generator](seed);
+  }
+  return { map: floorDef.map, regions: null, arrivals: {}, prevCells: {} };
+}
+
+// 見た目のテーマ（床・壁の色、壁の高さ、柱などの小物）
+const THEMES = {
+  stone: { floor: 0x57534c, wall: 0x4a4740, cap: 0x77705f, prop: 'pillar' },
+  crystal: { floor: 0x2a4f8c, wall: 0x0e1528, cap: 0x0c1426, prop: 'pillar' },
+  canyon: { floor: 0x5a4636, wall: 0x7a5440, cap: 0x8a6448, prop: 'boulder', wallH: 9 },
+  dead: { floor: 0x24211e, wall: 0x4a4844, cap: 0x5a5854, prop: 'ruin', wallH: 3 },
+  desert: { floor: 0xb89660, wall: 0x9a7650, cap: 0xa88458, prop: 'ruin', wallH: 4.5 },
+  forest: { floor: 0x2c4628, wall: 0x4a5a3a, cap: 0x56663f, prop: 'tree', wallH: 4 },
+  pilgrim: { floor: 0x46562e, wall: 0x6a6a60, cap: 0x7a7a6e, prop: 'tree', wallH: 4 },
+};
+// 第3層はフィールドごとに床の色を変えて、どこにいるかわかるようにする
+const FIELD_FLOOR = { witch: 0x1e3420, hill: 0x67675c, orc: 0x5a4a30, swamp: 0x26382e, statue: 0x6a665a, road_w: 0x6a5e44,
+  plain_nw: 0x4a5a48, battle_ne: 0x4a3e34, valley_se: 0x6a5a3e, grass_sw: 0x50682e, gate_n: 0x5a5a50 };
+
+const pillarKey = (r, c) => r * 1000 + c;
+function addPillar(x, z, r) {
+  const k = pillarKey(Math.round(z / T), Math.round(x / T));
+  if (!world.pillarGrid.has(k)) world.pillarGrid.set(k, []);
+  const p = { x, z, r };
+  world.pillarGrid.get(k).push(p);
+  world.pillars.push(p);
+  return p;
+}
+function removePillar(p) {
+  for (const list of world.pillarGrid.values()) { const i = list.indexOf(p); if (i >= 0) list.splice(i, 1); }
+  const i = world.pillars.indexOf(p); if (i >= 0) world.pillars.splice(i, 1);
+}
+
+// いる場所の地域（regions のキー）と、その設定
+function regionKeyAt(pos) {
+  const r = Math.round(pos.z / T), c = Math.round(pos.x / T);
+  return world.regions?.[r]?.[c] ?? null;
+}
+function regionAt(pos) {
+  const k = regionKeyAt(pos);
+  return k ? world.floor.regions?.[k] ?? null : null;
+}
+const isSafeCell = (r, c) => { const k = world.regions?.[r]?.[c]; return !!(k && world.floor.regions?.[k]?.safe); };
+
+// 地域の魔物の表から 1 体選ぶ（重みつき。'rare' はまれにしか出ない）
+function pickSpecies(region, rnd = Math.random) {
+  const list = region.monsters;
+  const total = list.reduce((s, [, w]) => s + w, 0);
+  let x = rnd() * total;
+  for (const [id, w] of list) { x -= w; if (x <= 0) return id; }
+  return list[0][0];
+}
+
+// 群れを出す（中心のまわりの歩けるマスに散らす）
+function spawnGroup(region, r, c, count) {
+  const cells = [];
+  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+    const rr = r + dr, cc = c + dc;
+    if (!isWallCell(rr, cc) && !'PTM'.includes(world.grid[rr][cc]) && !isSafeCell(rr, cc)) cells.push([rr, cc]);
+  }
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const [rr, cc] = cells[Math.floor(Math.random() * cells.length)] ?? [r, c];
+    const p = cellCenter(rr, cc).add(new THREE.Vector3((Math.random() - 0.5) * 2.4, 0, (Math.random() - 0.5) * 2.4));
+    const id = pickSpecies(region);
+    const m = spawnMonster(id, p);
+    m.home.copy(cellCenter(r, c));
+    if (D.MONSTERS[id].grade <= 6 && region.monsters.find(e => e[0] === id)?.[2] === 'rare') log(`強大な気配……${D.MONSTERS[id].name}がどこかに現れた。`);
+    out.push(m);
+  }
+  return out;
+}
+
 function buildFloor(floorDef, arrive = 'start', restore = null) {
   if (world.root) scene.remove(world.root);
   const root = new THREE.Group();
   world.root = root;
   scene.add(root);
   world.floor = floorDef;
-  world.grid = floorDef.map.map(row => row.split(''));
+  const layout = floorLayout(floorDef);
+  world.layout = layout;
+  world.grid = layout.map.map(row => row.split(''));
+  world.regions = layout.regions;
   world.rows = world.grid.length;
   world.cols = world.grid[0].length;
   world.pillars = [];
+  world.pillarGrid = new Map();
   world.monsters = [];
   world.orbs = [];
   world.stones = [];
   world.portals = [];
   world.spawnCells = [];
+  world.traps = new Map();
+  world.steles = [];
+  world.projectiles = [];
+  world.fieldKey = null;
   for (const el of document.querySelectorAll('.ebar')) el.remove();
-  const rnd = seeded(floorDef.id * 7919);
+  const rnd = seeded(floorDef.id * 7919 + (floorDef.generator ? (world.run?.seed ?? 1) : 0));
   const L = floorDef.lighting;
-
+  const theme = THEMES[floorDef.theme] ?? THEMES.stone;
   const crystalMode = L.mode === 'crystal';
+  const night = L.mode === 'night';          // 夜のように暗く、空（高い天井）に星明かり
+  const wallH = theme.wallH ?? D.WALL_HEIGHT;
+  world.wallH = wallH;
+
   scene.background = new THREE.Color(L.fog);
-  scene.fog = new THREE.Fog(L.fog, 14, crystalMode ? L.litFog : 42);
+  scene.fog = new THREE.Fog(L.fog, night ? L.sight * 0.25 : 14, crystalMode ? L.litFog : night ? L.sight : 42);
   root.add(new THREE.HemisphereLight(L.ambient, 0x10100c, L.ambientIntensity));
   world.vis = null;
   world.glow = null;
   world.crystalPoints = null;
   world.inDark = false;
 
-  // 床（インスタンス描画）
+  // マスを分類する
   const floorCells = [], wallCells = [];
   let start = null;
   const portalCells = { N: [], U: [], R: [], B: [] };
+  const gateCells = [], markers = [], steleCells = [], propCells = [];
+  let monument = null;
   for (let r = 0; r < world.rows; r++) {
     for (let c = 0; c < world.cols; c++) {
       const ch = world.grid[r][c];
@@ -352,12 +445,18 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
         const touches = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
           .some(([dr, dc]) => !isWallCell(r + dr, c + dc));
         if (touches) wallCells.push([r, c]);
-      } else {
-        floorCells.push([r, c]);
-        if (ch === 'S') start = [r, c];
-        if (portalCells[ch]) portalCells[ch].push([r, c]);
-        if (floorDef.monsterTable[ch]) world.spawnCells.push({ r, c, id: floorDef.monsterTable[ch] });
+        continue;
       }
+      floorCells.push([r, c]);
+      if (ch === 'S') start = [r, c];
+      if (portalCells[ch]) portalCells[ch].push([r, c]);
+      if (floorDef.gates?.[ch]) gateCells.push([r, c, ch]);
+      if (ch === 'm') markers.push([r, c]);
+      if (ch === 'T') steleCells.push([r, c]);
+      if (ch === 'P') propCells.push([r, c]);
+      if (ch === 'M') monument = [r, c];
+      if (ch === '^') world.traps.set(pillarKey(r, c), { r, c, revealed: false, cooldown: 0, model: null });
+      if (floorDef.monsterTable?.[ch]) world.spawnCells.push({ r, c, id: floorDef.monsterTable[ch] });
     }
   }
   let crystals = [], glowMap = null;
@@ -369,37 +468,43 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   }
   const tmp = new THREE.Object3D();
   const col = new THREE.Color();
+  // 床（インスタンス描画）
   const floorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.2, T), crystalMode ? glowMat(0x2a4f8c, 0x4a96ee, 0.85, glowMap) : flatMat(0xffffff, { roughness: 0.95 }), floorCells.length);
   floorCells.forEach(([r, c], i) => {
     tmp.position.set(c * T, -0.1, r * T); tmp.rotation.set(0, 0, 0); tmp.scale.set(1, 1, 1); tmp.updateMatrix();
     floorMesh.setMatrixAt(i, tmp.matrix);
-    const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.34 + rnd() * 0.08;
-    floorMesh.setColorAt(i, col.setRGB(v * 1.02, v, v * 0.92));
+    if (crystalMode) { const v = 0.9 + rnd() * 0.2; floorMesh.setColorAt(i, col.setRGB(v, v, v)); return; }
+    const base = FIELD_FLOOR[world.regions?.[r]?.[c]] ?? theme.floor;
+    col.set(base).multiplyScalar(0.85 + rnd() * 0.3);
+    floorMesh.setColorAt(i, col);
   });
   floorMesh.receiveShadow = true;
   root.add(floorMesh);
 
-  // 床の継ぎ目（石畳っぽく見せる細い溝）
-  const seamMat = flatMat(crystalMode ? 0x1d3d70 : 0x1c1b1a);
-  const seamGeoX = new THREE.BoxGeometry(T, 0.02, 0.06), seamGeoZ = new THREE.BoxGeometry(0.06, 0.02, T);
-  const seams = new THREE.InstancedMesh(seamGeoX, seamMat, floorCells.length * 2);
-  const seamsZ = new THREE.InstancedMesh(seamGeoZ, seamMat, floorCells.length * 2);
-  floorCells.forEach(([r, c], i) => {
-    for (let k = 0; k < 2; k++) {
-      tmp.position.set(c * T, 0.005, r * T - T / 2 + (k + 0.5) * T / 2); tmp.updateMatrix(); seams.setMatrixAt(i * 2 + k, tmp.matrix);
-      tmp.position.set(c * T - T / 2 + (k + 0.5) * T / 2, 0.005, r * T); tmp.updateMatrix(); seamsZ.setMatrixAt(i * 2 + k, tmp.matrix);
-    }
-  });
-  root.add(seams, seamsZ);
+  // 床の継ぎ目（石畳っぽく見せる細い溝。屋内の階層だけ）
+  if (!night) {
+    const seamMat = flatMat(crystalMode ? 0x1d3d70 : 0x1c1b1a);
+    const seamGeoX = new THREE.BoxGeometry(T, 0.02, 0.06), seamGeoZ = new THREE.BoxGeometry(0.06, 0.02, T);
+    const seams = new THREE.InstancedMesh(seamGeoX, seamMat, floorCells.length * 2);
+    const seamsZ = new THREE.InstancedMesh(seamGeoZ, seamMat, floorCells.length * 2);
+    floorCells.forEach(([r, c], i) => {
+      for (let k = 0; k < 2; k++) {
+        tmp.position.set(c * T, 0.005, r * T - T / 2 + (k + 0.5) * T / 2); tmp.updateMatrix(); seams.setMatrixAt(i * 2 + k, tmp.matrix);
+        tmp.position.set(c * T - T / 2 + (k + 0.5) * T / 2, 0.005, r * T); tmp.updateMatrix(); seamsZ.setMatrixAt(i * 2 + k, tmp.matrix);
+      }
+    });
+    root.add(seams, seamsZ);
+  }
 
-  // 壁（インスタンス描画。少しずつ色と高さを変えて石積みらしく）
-  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, D.WALL_HEIGHT, T), crystalMode ? glowMat(0x0e1528, 0x1c3460, 0.45, glowMap) : flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
+  // 壁（インスタンス描画。少しずつ色と高さを変える）
+  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, wallH, T), crystalMode ? glowMat(0x0e1528, 0x1c3460, 0.45, glowMap) : flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
   wallCells.forEach(([r, c], i) => {
-    const hy = 1 + (rnd() - 0.5) * 0.08;
-    tmp.position.set(c * T, D.WALL_HEIGHT * hy / 2, r * T); tmp.scale.set(1, hy, 1); tmp.updateMatrix();
+    const hy = 1 + (rnd() - 0.5) * (night ? 0.5 : 0.08);
+    tmp.position.set(c * T, wallH * hy / 2, r * T); tmp.scale.set(1, hy, 1); tmp.updateMatrix();
     wallMesh.setMatrixAt(i, tmp.matrix);
-    const v = crystalMode ? 0.85 + rnd() * 0.3 : 0.28 + rnd() * 0.07;
-    wallMesh.setColorAt(i, col.setRGB(v, v * 0.96, v * 0.9));
+    if (crystalMode) { const v = 0.85 + rnd() * 0.3; wallMesh.setColorAt(i, col.setRGB(v, v * 0.96, v * 0.9)); return; }
+    col.set(theme.wall).multiplyScalar(0.8 + rnd() * 0.4);
+    wallMesh.setColorAt(i, col);
   });
   tmp.scale.set(1, 1, 1);
   wallMesh.castShadow = true;
@@ -407,45 +512,43 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   root.add(wallMesh);
   world.wallMesh = wallMesh;
 
-  // 天井（一人称視点では見上げると見える）
-  const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), crystalMode ? glowMat(0x13213e, 0x2a5aa0, 0.45, glowMap) : flatMat(0xffffff, { roughness: 1 }), floorCells.length);
-  floorCells.forEach(([r, c], i) => {
-    tmp.position.set(c * T, D.WALL_HEIGHT + 0.15, r * T); tmp.updateMatrix();
-    ceil.setMatrixAt(i, tmp.matrix);
-    const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.16 + rnd() * 0.04;
-    ceil.setColorAt(i, col.setRGB(v, v * 0.97, v * 0.93));
-  });
-  ceil.receiveShadow = true;
-  root.add(ceil);
-  // 天井の梁（4m ごと）
-  const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.35, 0.35), flatMat(0x3a2c20), floorCells.length);
-  floorCells.forEach(([r, c], i) => {
-    tmp.position.set(c * T, D.WALL_HEIGHT - 0.15, r * T - T / 2); tmp.updateMatrix(); beams.setMatrixAt(i, tmp.matrix);
-  });
-  if (!crystalMode) root.add(beams);   // 水晶の迷宮には木の梁はない
+  if (!night) {
+    // 天井（一人称視点では見上げると見える）
+    const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), crystalMode ? glowMat(0x13213e, 0x2a5aa0, 0.45, glowMap) : flatMat(0xffffff, { roughness: 1 }), floorCells.length);
+    floorCells.forEach(([r, c], i) => {
+      tmp.position.set(c * T, wallH + 0.15, r * T); tmp.updateMatrix();
+      ceil.setMatrixAt(i, tmp.matrix);
+      const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.16 + rnd() * 0.04;
+      ceil.setColorAt(i, col.setRGB(v, v * 0.97, v * 0.93));
+    });
+    ceil.receiveShadow = true;
+    root.add(ceil);
+    if (!crystalMode) {
+      // 天井の梁（4m ごと）
+      const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.35, 0.35), flatMat(0x3a2c20), floorCells.length);
+      floorCells.forEach(([r, c], i) => {
+        tmp.position.set(c * T, wallH - 0.15, r * T - T / 2); tmp.updateMatrix(); beams.setMatrixAt(i, tmp.matrix);
+      });
+      root.add(beams);
+    }
+  } else if (L.stars) {
+    buildStarSky(root, rnd);
+  }
 
   // 壁の上端の縁取り（輪郭をわかりやすくする）
-  const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(crystalMode ? 0x0c1426 : 0x77705f), wallCells.length);
+  const capMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T + 0.1, 0.15, T + 0.1), flatMat(theme.cap), wallCells.length);
   wallCells.forEach(([r, c], i) => {
-    tmp.position.set(c * T, D.WALL_HEIGHT + 0.07, r * T); tmp.updateMatrix(); capMesh.setMatrixAt(i, tmp.matrix);
+    tmp.position.set(c * T, wallH + 0.07, r * T); tmp.updateMatrix(); capMesh.setMatrixAt(i, tmp.matrix);
   });
   root.add(capMesh);
 
-  // 柱・瓦礫
-  for (const [r, c] of floorCells) {
-    const ch = world.grid[r][c];
-    const p = cellCenter(r, c);
-    if (ch === 'P') {
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.65, D.WALL_HEIGHT, 8), flatMat(0x5a5650));
-      pillar.position.set(p.x, D.WALL_HEIGHT / 2, p.z);
-      pillar.castShadow = pillar.receiveShadow = true;
-      root.add(pillar);
-      for (const y of [0.15, D.WALL_HEIGHT - 0.15]) {
-        const ring = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 1.5), flatMat(0x46433e));
-        ring.position.set(p.x, y, p.z); root.add(ring);
-      }
-      world.pillars.push({ x: p.x, z: p.z, r: 0.75 });
-    } else if (!crystalMode && rnd() < 0.18 && ch === '.') {
+  // 柱・木・岩・残骸（P）。数が多いのでインスタンス描画にする
+  buildProps(root, propCells, theme, rnd, wallH);
+  // 瓦礫（石の回廊だけ）
+  if (floorDef.theme === undefined) {
+    for (const [r, c] of floorCells) {
+      if (world.grid[r][c] !== '.' || rnd() >= 0.18) continue;
+      const p = cellCenter(r, c);
       for (let k = 0; k < 3; k++) {
         const s = 0.15 + rnd() * 0.3;
         const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), flatMat(0x4c4842));
@@ -455,65 +558,85 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
       }
     }
   }
+  // 記念碑（第1層の中心。周りは安全地帯）
+  if (monument) {
+    const p = cellCenter(...monument);
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.5, 0.5, 8), flatMat(0x6a7488)); base.position.set(p.x, 0.25, p.z); root.add(base);
+    const obelisk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.6, 3.2, 4), flatMat(0x8a94a8)); obelisk.position.set(p.x, 2.1, p.z); obelisk.rotation.y = Math.PI / 4; obelisk.castShadow = true; root.add(obelisk);
+    const rune = new THREE.Mesh(new THREE.OctahedronGeometry(0.3, 0), new THREE.MeshBasicMaterial({ color: 0xbfe8ff })); rune.position.set(p.x, 4.0, p.z); root.add(rune);
+    world.monumentRune = rune;
+    addPillar(p.x, p.z, 1.4);
+  }
+  // 石碑（ゴブリンの森）：どれか 1 つが第3層への門になる（探索ごとに決まる）
+  if (steleCells.length) {
+    const flags = runFlags(floorDef.id);
+    const trueIndex = Math.floor(seeded((world.run?.seed ?? 1) * 13 + floorDef.id)() * steleCells.length);
+    steleCells.forEach(([r, c], i) => {
+      const p = cellCenter(r, c);
+      const st = { r, c, pos: p, isTrue: i === trueIndex, state: flags.steleOpened === undefined ? 'sleep' : (i === flags.steleOpened ? 'open' : 'rubble') };
+      world.steles.push(st);
+      if (st.state === 'open') { addPortal('next', [r, c], floorDef.next); return; }
+      st.model = makeStele(st.state === 'rubble');
+      st.model.position.set(p.x, 0, p.z);
+      root.add(st.model);
+      st.pillar = addPillar(p.x, p.z, 0.8);
+    });
+  }
 
-  // 松明（光源は数を固定する：見た目だけの松明と、光る松明を分ける）。水晶の迷宮では松明の代わりにライトクリスタル
+  // 明かり：クリスタル（第1層）／松明（固定マップ・砂漠の残骸）
   if (crystalMode) buildCrystals(root, crystals, rnd, L);
-  const torchCandidates = [];
-  if (!crystalMode) {
-  for (const [r, c] of wallCells) {
-    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      if (!isWallCell(r + dr, c + dc)) torchCandidates.push([r, c, dr, dc]);
-    }
-  }
-  const torchCount = Math.min(14, torchCandidates.length);
-  const lit = [];
-  for (let i = 0; i < torchCount; i++) {
-    const [r, c, dr, dc] = torchCandidates[Math.floor(rnd() * torchCandidates.length)];
-    const x = c * T + dc * (T / 2 + 0.08), z = r * T + dr * (T / 2 + 0.08);
-    const holder = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), flatMat(0x3a2a1a));
-    holder.position.set(x, 2.1, z); root.add(holder);
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.32, 5),
-      new THREE.MeshBasicMaterial({ color: L.torchColor }));
-    flame.position.set(x, 2.5, z); root.add(flame);
-    if (lit.length < 4) lit.push({ x, z, flame });
-  }
-  world.torchLights = lit.map(t => {
-    const l = new THREE.PointLight(L.torchColor, 14, 13, 1.8);
-    l.position.set(t.x, 2.6, t.z);
-    root.add(l);
-    return { light: l, base: 14, flame: t.flame };
-  });
-  }
+  else world.torchLights = buildTorches(root, wallCells, propCells, rnd, L, night, wallH);
 
-  // 門（候補地点ごとに出現率で決める）
-  const depthFloor = d => D.FLOORS.find(f => !f.isSpecialRift && f.depth === d);
+  // 門
   const pick = (cells, rate, atLeastOne) => {
     const chosen = cells.filter(() => Math.random() < rate);
     if (atLeastOne && !chosen.length && cells.length && rate > 0) chosen.push(cells[Math.floor(Math.random() * cells.length)]);
     return chosen;
   };
-  const next = floorDef.isSpecialRift ? null : depthFloor(floorDef.depth + 1);
-  const prev = floorDef.isSpecialRift ? null : depthFloor(floorDef.depth - 1);
   if (restore) {
     for (const p of restore.portals) addPortal(p.kind, p.cell, p.target, p.rot);
   } else {
-    if (next) for (const cell of pick(portalCells.N, floorDef.nextPortalSpawnRate, true)) addPortal('next', cell, next.id);
-    if (prev) for (const cell of pick(portalCells.U, floorDef.prevPortalSpawnRate, false)) addPortal('prev', cell, prev.id);
+    // 第1層の東西南北の門
+    for (const [r, c, ch] of gateCells) addPortal('next', [r, c], floorDef.gates[ch].target, null, floorDef.gates[ch].label);
+    if (floorDef.generator) {
+      // 生成マップ：N と U はそのまま門になる（第3層の上層への門は、来たエリアへ戻る 1 つだけ）
+      if (floorDef.next) for (const cell of portalCells.N) addPortal('next', cell, floorDef.next);
+      if (floorDef.prev === 'via') {
+        const via = world.run?.via ?? 22;
+        if (layout.prevCells[via]) addPortal('prev', layout.prevCells[via], via);
+      } else if (floorDef.prev) for (const cell of portalCells.U) addPortal('prev', cell, floorDef.prev);
+    } else {
+      if (floorDef.next) for (const cell of pick(portalCells.N, floorDef.nextPortalSpawnRate, true)) addPortal('next', cell, floorDef.next);
+      if (floorDef.prev) for (const cell of pick(portalCells.U, floorDef.prevPortalSpawnRate, false)) addPortal('prev', cell, floorDef.prev);
+    }
     // 亀裂から戻ってきたときは、亀裂の門を必ず置く（そこから出てくる）
-    const riftCells = arrive === 'fromRift' ? portalCells.R.slice(0, 1) : pick(portalCells.R, floorDef.riftPortalSpawnRate, false);
+    const riftCells = arrive === 'fromRift' ? portalCells.R.slice(0, 1) : pick(portalCells.R, floorDef.riftPortalSpawnRate ?? 0, false);
     for (const cell of riftCells) addPortal('rift', cell, D.RIFT_FLOOR_ID);
     for (const cell of portalCells.B) addPortal('back', cell, world.riftReturn ?? 1);
   }
 
   // プレイヤーの到着位置
-  let sp = cellCenter(...start ?? portalCells.B[0]);
+  let sp = cellCenter(...(start ?? portalCells.B[0] ?? floorCells[0]));
   const near = kind => world.portals.find(p => p.kind === kind);
-  if (arrive === 'fromBelow' && near('next')) sp = near('next').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
-  if (arrive === 'fromRift' && near('rift')) sp = near('rift').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
-  if (floorDef.isSpecialRift && near('back')) sp = near('back').pos.clone().add(new THREE.Vector3(0, 0, 1.8));
+  const beside = p => {
+    // 門の向きに合わせて、くぐってきた側に出る
+    const a = p.model.group.rotation.y;
+    for (const s of [1, -1]) {
+      const q = p.pos.clone().add(new THREE.Vector3(Math.sin(a) * 2 * s, 0, Math.cos(a) * 2 * s));
+      if (cellAt(q.x, q.z) !== '#') return q;
+    }
+    return p.pos.clone().add(new THREE.Vector3(0, 0, 1.8));
+  };
+  if (arrive === 'fromBelow') {
+    // 下の層から戻ってきた：その層へ続く門のそば
+    const p = world.portals.find(p => p.kind === 'next' && p.target === world.arriveFrom) ?? near('next');
+    if (p) sp = beside(p);
+  }
+  if (arrive === 'fromAbove' && layout.arrivals[world.arriveFrom]) sp = cellCenter(...layout.arrivals[world.arriveFrom]);
+  if (arrive === 'fromRift' && near('rift')) sp = beside(near('rift'));
+  if (floorDef.isSpecialRift && near('back')) sp = beside(near('back'));
   player.pos.copy(sp);
   player.facing = Math.PI;  // +Z 方向（ダンジョンの奥）を向く
-  if (arrive === 'start' && floorDef.startFacing === 'north') player.facing = 0;   // -Z（マップの上＝北）
   world.landedInDark = false;
   if (arrive === 'start' && floorDef.randomStart && !restore) {
     const land = chooseLanding(floorDef, world.entryLate);
@@ -522,15 +645,21 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     player.facing = land.yaw;
     world.landedInDark = land.dark;
   }
+  if (arrive === 'fromAbove' || (arrive === 'start' && floorDef.generator && !floorDef.randomStart)) {
+    // 階層の中心のほうを向く。すぐそばに上層への門があれば、門に背を向ける
+    const cx = world.cols * T / 2, cz = world.rows * T / 2;
+    player.facing = Math.atan2(-(cx - player.pos.x), -(cz - player.pos.z));
+    player.facing = openestDirection(player.pos);
+  }
   if (restore) { player.pos.set(restore.player.x, 0, restore.player.z); player.facing = restore.player.yaw; }
   collide(player.pos, 0.45);
   camState.yaw = player.facing;
   camState.pitch = -0.08;
 
   // プレイヤーの松明（影を落とす唯一の光源）
-  // 水晶の迷宮では手元を照らす程度（暗黒地帯では先が見えない）
-  world.torchBase = crystalMode ? 4 : 14;
-  const torch = new THREE.PointLight(0xffc27a, world.torchBase, crystalMode ? 8 : 18, 1.5);
+  // 水晶の洞窟では手元を照らす程度（暗黒地帯では先が見えない）
+  world.torchBase = crystalMode ? 4 : night ? 9 : 14;
+  const torch = new THREE.PointLight(0xffc27a, world.torchBase, crystalMode ? 8 : night ? 14 : 18, 1.5);
   torch.castShadow = settings.quality === 'high';
   torch.shadow.mapSize.set(512, 512);
   torch.shadow.bias = -0.002;
@@ -547,16 +676,163 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     for (const o of restore.orbs) placeOrb(o.id, o.x, o.z);
     for (const [x, z, grade] of restore.stones) placeStone(x, z, grade ?? 9);
   } else {
-    for (const [r, c] of floorCells) {
-      const id = floorDef.monsterTable[world.grid[r][c]];
-      if (id) spawnMonster(id, cellCenter(r, c), world.grid[r][c] === floorDef.bossMonster);
+    for (const sc of world.spawnCells) spawnMonster(sc.id, cellCenter(sc.r, sc.c), world.grid[sc.r][sc.c] === floorDef.bossMonster);
+    // 群れ（地域ごとの魔物の表から）
+    for (const [r, c] of markers) {
+      const region = floorDef.regions[world.regions[r][c]];
+      if (!region?.monsters?.length) continue;
+      const [lo, hi] = region.group ?? [1, 1];
+      spawnGroup(region, r, c, lo + Math.floor(Math.random() * (hi - lo + 1)));
     }
+    // 深淵の侵食（第1層の特殊な条件）
+    if (floorDef.abyss && arrive === 'start' && Math.random() < (world.forceAbyss ? 1 : floorDef.abyss.chance)) {
+      for (const [reg, id] of Object.entries(floorDef.abyss.monsters)) {
+        const cand = markers.filter(([r, c]) => world.regions[r][c] === reg);
+        const [r, c] = cand[Math.floor(Math.random() * cand.length)] ?? markers[0];
+        spawnMonster(id, cellCenter(r, c));
+      }
+      world.abyssEvent = true;
+    } else world.abyssEvent = false;
   }
+  // 日付が変わったときの出現地点（群れの場所）
+  for (const [r, c] of markers) world.spawnCells.push({ r, c, region: world.regions[r][c] });
 }
 
-function addPortal(kind, [r, c], target, rot = null) {
-  // 上層への門は、上の層がすでに閉鎖されていたら閉ざされている
-  const closed = kind === 'prev' && checkFloorClosure(world.time.day, target);
+// いちばん先まで見通せる向き（到着したとき、壁や門ではなく開けた方を向く）
+function openestDirection(pos) {
+  let best = 0, bestLen = -1;
+  for (let i = 0; i < 16; i++) {
+    const a = i / 16 * Math.PI * 2, dx = -Math.sin(a), dz = -Math.cos(a);
+    let len = 0;
+    while (len < 40 && cellAt(pos.x + dx * len, pos.z + dz * len) !== '#' && !'PTUN'.includes(cellAt(pos.x + dx * len, pos.z + dz * len)) || len < 1) len += 0.5;
+    if (len > bestLen) { bestLen = len; best = a; }
+  }
+  return best;
+}
+
+// 夜空（高い天井に天の川のように散らばる光）
+function buildStarSky(root, rnd) {
+  const n = 900, pos = [];
+  const cx = world.cols * T / 2, cz = world.rows * T / 2, R = Math.max(world.cols, world.rows) * T;
+  for (let i = 0; i < n; i++) {
+    // 帯状に多く集める（天の川）
+    const band = rnd() < 0.6;
+    const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * R;
+    let x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
+    if (band) { const t = (rnd() - 0.5) * 2 * R; x = cx + t; z = cz + t * 0.4 + (rnd() - 0.5) * R * 0.25; }
+    pos.push(x, 40 + rnd() * 12, z);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  const stars = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xcfe0ff, size: 1.4, sizeAttenuation: true, fog: false, transparent: true, opacity: 0.9 }));
+  root.add(stars);
+}
+
+// 柱・木・岩・残骸（P のマス）
+function buildProps(root, cells, theme, rnd, wallH) {
+  if (!cells.length) return;
+  const tmp = new THREE.Object3D();
+  const col = new THREE.Color();
+  const kindAt = (r, c) => {
+    if (theme.prop !== 'tree') return theme.prop;
+    const reg = world.regions?.[r]?.[c];
+    if (reg === 'statue') return 'ruin';
+    if (reg === 'hill' || reg === 'valley_se' || reg === 'battle_ne') return rnd() < 0.6 ? 'boulder' : 'tree';
+    return 'tree';
+  };
+  const groups = { pillar: [], boulder: [], ruin: [], tree: [] };
+  for (const [r, c] of cells) groups[kindAt(r, c)].push([r, c]);
+  const inst = (geo, mat, list, place) => {
+    if (!list.length) return;
+    const m = new THREE.InstancedMesh(geo, mat, list.length);
+    list.forEach((cell, i) => { place(cell, tmp, i); tmp.updateMatrix(); m.setMatrixAt(i, tmp.matrix); if (m.instanceColor || cell.color) m.setColorAt(i, cell.color ?? col.set(0xffffff)); });
+    m.castShadow = true; m.receiveShadow = true;
+    root.add(m);
+  };
+  // 柱
+  inst(new THREE.CylinderGeometry(0.55, 0.65, wallH, 8), flatMat(0x5a5650), groups.pillar, ([r, c], o) => {
+    const p = cellCenter(r, c); o.position.set(p.x, wallH / 2, p.z); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); addPillar(p.x, p.z, 0.75); });
+  // 岩
+  inst(new THREE.DodecahedronGeometry(1.2, 0), flatMat(0xffffff), groups.boulder.map(cell => Object.assign(cell, { color: new THREE.Color(theme.wall).multiplyScalar(0.8 + rnd() * 0.4) })), ([r, c], o) => {
+    const p = cellCenter(r, c); const s = 0.8 + rnd() * 0.6;
+    o.position.set(p.x + (rnd() - 0.5), s * 0.7, p.z + (rnd() - 0.5)); o.rotation.set(rnd() * 3, rnd() * 3, 0); o.scale.set(s, s * 0.9, s); addPillar(o.position.x, o.position.z, 1.1 * s); });
+  // 残骸（折れた柱）
+  inst(new THREE.BoxGeometry(1.1, 1, 1.1), flatMat(0xffffff), groups.ruin.map(cell => Object.assign(cell, { color: new THREE.Color(theme.cap).multiplyScalar(0.8 + rnd() * 0.35) })), ([r, c], o) => {
+    const p = cellCenter(r, c); const h = 1 + rnd() * 2.5;
+    o.position.set(p.x, h / 2, p.z); o.rotation.set((rnd() - 0.5) * 0.25, rnd() * 3, (rnd() - 0.5) * 0.25); o.scale.set(1, h, 1); addPillar(p.x, p.z, 0.8); });
+  // 木：幹と葉
+  const trees = groups.tree.map(([r, c]) => {
+    const p = cellCenter(r, c);
+    const witch = world.regions?.[r]?.[c] === 'witch';
+    return { x: p.x + (rnd() - 0.5) * 1.5, z: p.z + (rnd() - 0.5) * 1.5, h: (witch ? 6 : 4) + rnd() * 3, s: 0.8 + rnd() * 0.6,
+      color: new THREE.Color(witch ? 0x1a3a26 : floorDefLeaf()).multiplyScalar(0.75 + rnd() * 0.5) };
+  });
+  function floorDefLeaf() { return world.floor.theme === 'forest' ? 0x2f5a2a : 0x3f6a32; }
+  inst(new THREE.CylinderGeometry(0.25, 0.4, 1, 6), flatMat(0x4a3424), trees.map(t => ({ ...t, color: null })), (t, o) => {
+    o.position.set(t.x, t.h / 2, t.z); o.rotation.set(0, 0, 0); o.scale.set(t.s, t.h, t.s); addPillar(t.x, t.z, 0.45 * t.s + 0.1); });
+  inst(new THREE.ConeGeometry(1.6, 3.2, 7), flatMat(0xffffff), trees, (t, o) => {
+    o.position.set(t.x, t.h + 0.6, t.z); o.rotation.set(0, rnd() * 3, 0); o.scale.set(t.s, t.s, t.s); });
+}
+
+// 松明：壁に付いた松明（固定マップ）や、砂漠の残骸の松明。光る松明は 4 つまで（残りは見た目だけ）
+function buildTorches(root, wallCells, propCells, rnd, L, night, wallH) {
+  const candidates = [];
+  if (!night) {
+    for (const [r, c] of wallCells) for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      if (!isWallCell(r + dr, c + dc)) candidates.push({ x: c * T + dc * (T / 2 + 0.08), z: r * T + dr * (T / 2 + 0.08), y: 2.1 });
+    }
+  } else if (L.torches) {
+    for (const [r, c] of propCells) { const p = cellCenter(r, c); candidates.push({ x: p.x + 0.7, z: p.z + 0.7, y: 1.6, stand: true }); }
+  }
+  if (!candidates.length) return [];
+  const count = Math.min(night ? 40 : 14, candidates.length);
+  const lit = [];
+  const holderGeo = new THREE.BoxGeometry(0.12, 0.5, 0.12), flameGeo = new THREE.ConeGeometry(0.12, 0.32, 5);
+  const flameMat = new THREE.MeshBasicMaterial({ color: L.torchColor });
+  const used = new Set();
+  for (let i = 0; i < count; i++) {
+    const k = Math.floor(rnd() * candidates.length);
+    if (used.has(k)) continue;
+    used.add(k);
+    const t = candidates[k];
+    const holder = new THREE.Mesh(t.stand ? new THREE.CylinderGeometry(0.05, 0.07, 1.6, 5) : holderGeo, flatMat(0x3a2a1a));
+    holder.position.set(t.x, t.stand ? 0.8 : t.y, t.z); root.add(holder);
+    const flame = new THREE.Mesh(flameGeo, flameMat);
+    flame.position.set(t.x, t.y + (t.stand ? 0.1 : 0.4), t.z); root.add(flame);
+    if (lit.length < 4) lit.push({ x: t.x, z: t.z, y: t.y + 0.5, flame });
+  }
+  return lit.map(t => {
+    const l = new THREE.PointLight(L.torchColor, 14, 13, 1.8);
+    l.position.set(t.x, t.y, t.z);
+    root.add(l);
+    return { light: l, base: 14, flame: t.flame };
+  });
+}
+
+// 石碑（ゴブリンの森）。rubble ならただの石塊
+function makeStele(rubble) {
+  const g = new THREE.Group();
+  if (rubble) {
+    for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.DodecahedronGeometry(0.4 + i * 0.1, 0), flatMat(0x6a6a62)); b.position.set((i - 1) * 0.5, 0.3, (i % 2) * 0.3); g.add(b); }
+    return g;
+  }
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.6, 0.5), flatMat(0x7a7a72)); slab.position.y = 1.3; slab.castShadow = true; g.add(slab);
+  const rune = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 0.04), new THREE.MeshStandardMaterial({ color: 0x9a9aff, emissive: 0x5a5aff, emissiveIntensity: 0.6 }));
+  rune.position.set(0, 1.5, -0.27); g.add(rune);
+  rune.name = 'rune';
+  return g;
+}
+
+// 探索中の階層ごとの記録（石碑・魔女の目・オークの討伐数など）
+function runFlags(floorId) {
+  if (!world.run) return {};
+  world.run.flags ??= {};
+  return (world.run.flags[floorId] ??= {});
+}
+
+function addPortal(kind, [r, c], target, rot = null, label = null) {
+  // 上層への門は、上の層がすでに閉鎖されていたら閉ざされている（突入からの経過時間で判定）
+  const closed = kind === 'prev' && checkFloorClosure(world.time.elapsed, target);
   const model = makePortal(kind, closed);
   const pos = cellCenter(r, c);
   model.group.position.copy(pos);
@@ -565,10 +841,10 @@ function addPortal(kind, [r, c], target, rot = null) {
   const auto = openNS && !openEW ? 0 : openEW && !openNS ? Math.PI / 2 : (Math.random() < 0.5 ? 0 : Math.PI / 2);
   model.group.rotation.y = rot ?? auto;
   world.root.add(model.group);
-  world.portals.push({ kind, pos, model, target, closed, cell: [r, c] });
+  world.portals.push({ kind, pos, model, target, closed, cell: [r, c], label });
   // 門の柱にぶつかるようにする（くぐる中央は通れる）
   const ax = Math.cos(model.group.rotation.y), az = -Math.sin(model.group.rotation.y);
-  for (const s of [-1, 1]) world.pillars.push({ x: pos.x + ax * 1.1 * s, z: pos.z + az * 1.1 * s, r: 0.3 });
+  for (const s of [-1, 1]) addPillar(pos.x + ax * 1.1 * s, pos.z + az * 1.1 * s, 0.3);
 }
 
 // ====================================================================== プレイヤー
@@ -606,12 +882,13 @@ function spawnMonster(id, pos, boss = false) {
     knockbackResist: Math.max(base.knockbackResist, 0.9) } : base;
   const s0 = world.floor.monsterScale ?? { hp: 1, attack: 1 };
   const scale = boss ? { hp: s0.hp * B.hp, attack: s0.attack * B.attack } : s0;
-  const model = makeMonster(def.model);
+  const model = makeMonster(def.model, def.look);
   if (boss) model.group.scale.setScalar(B.size);
   // 被弾時に個体ごと光らせるため、マテリアルを複製する
   const mats = [];
   model.group.traverse(o => {
-    if (o.isMesh) { o.material = o.material.clone(); mats.push(o.material); o.castShadow = true; }
+    // 光らせる演出は emissive を持つマテリアルだけ（MeshBasicMaterial の光る部品は対象外）
+    if (o.isMesh) { o.material = o.material.clone(); if (o.material.emissive) mats.push(o.material); o.castShadow = true; }
   });
   model.group.position.copy(pos);
   world.root.add(model.group);
@@ -657,9 +934,14 @@ function collide(pos, radius) {
         }
       }
     }
-    for (const p of world.pillars) {
-      const dx = pos.x - p.x, dz = pos.z - p.z, d = Math.hypot(dx, dz), min = p.r + radius;
-      if (d < min && d > 1e-6) { pos.x += dx / d * (min - d); pos.z += dz / d * (min - d); }
+    // 柱・木・岩（近くのマスのものだけ調べる）
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const list = world.pillarGrid.get(pillarKey(r0 + dr, c0 + dc));
+      if (!list) continue;
+      for (const p of list) {
+        const dx = pos.x - p.x, dz = pos.z - p.z, d = Math.hypot(dx, dz), min = p.r + radius;
+        if (d < min && d > 1e-6) { pos.x += dx / d * (min - d); pos.z += dz / d * (min - d); }
+      }
     }
   }
 }
@@ -683,12 +965,14 @@ function nextStepToward(from, to) {
   const key = (r, c) => r * world.cols + c;
   const prev = new Map([[key(sr, sc), -1]]);
   const queue = [[sr, sc]];
-  while (queue.length) {
-    const [r, c] = queue.shift();
+  for (let qi = 0; qi < queue.length; qi++) {
+    const [r, c] = queue[qi];
     if (r === tr && c === tc) break;
+    if (Math.abs(r - sr) + Math.abs(c - sc) > 30) continue;   // 遠すぎる所までは探さない
     for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nr = r + dr, nc = c + dc;
-      if (isWallCell(nr, nc) || prev.has(key(nr, nc))) continue;
+      // 魔物は壁・木などの障害物・安全地帯を通れない
+      if (isWallCell(nr, nc) || 'PTM'.includes(world.grid[nr][nc]) || isSafeCell(nr, nc) || prev.has(key(nr, nc))) continue;
       prev.set(key(nr, nc), key(r, c));
       queue.push([nr, nc]);
     }
@@ -703,7 +987,7 @@ function nextStepToward(from, to) {
 const MAX_PARTICLES = 500;
 const particles = {
   pos: new Float32Array(MAX_PARTICLES * 3), col: new Float32Array(MAX_PARTICLES * 3),
-  vel: new Float32Array(MAX_PARTICLES * 3), life: new Float32Array(MAX_PARTICLES), next: 0,
+  vel: new Float32Array(MAX_PARTICLES * 3), life: new Float32Array(MAX_PARTICLES), grav: new Float32Array(MAX_PARTICLES).fill(9), next: 0,
 };
 const pGeo = new THREE.BufferGeometry();
 pGeo.setAttribute('position', new THREE.BufferAttribute(particles.pos, 3));
@@ -724,7 +1008,19 @@ function burst(pos, color, count = 16, speed = 4, up = 2) {
     particles.vel.set([Math.cos(a) * s, up * (0.5 + Math.random()), Math.sin(a) * s], i * 3);
     particles.col.set([c.r, c.g, c.b], i * 3);
     particles.life[i] = 0.5 + Math.random() * 0.4;
+    particles.grav[i] = 9;
   }
+}
+
+// 1 粒だけ出す（重力なしで漂う光など）
+function spawnParticle(pos, color, vel, life = 2) {
+  const c = new THREE.Color(color);
+  const i = particles.next; particles.next = (particles.next + 1) % MAX_PARTICLES;
+  particles.pos.set([pos.x, pos.y, pos.z], i * 3);
+  particles.vel.set([vel.x, vel.y, vel.z], i * 3);
+  particles.col.set([c.r, c.g, c.b], i * 3);
+  particles.life[i] = life;
+  particles.grav[i] = 0;
 }
 
 function updateParticles(dt) {
@@ -732,11 +1028,11 @@ function updateParticles(dt) {
     if (particles.life[i] <= 0) continue;
     particles.life[i] -= dt;
     const k = i * 3;
-    particles.vel[k + 1] -= 9 * dt;
+    particles.vel[k + 1] -= particles.grav[i] * dt;
     particles.pos[k] += particles.vel[k] * dt;
     particles.pos[k + 1] = Math.max(0.05, particles.pos[k + 1] + particles.vel[k + 1] * dt);
     particles.pos[k + 2] += particles.vel[k + 2] * dt;
-    const fade = Math.max(0, particles.life[i] / 0.9);
+    const fade = particles.grav[i] ? Math.max(0, particles.life[i] / 0.9) : 1;
     particles.col[k] *= 0.97 + 0.03 * fade; particles.col[k + 1] *= 0.97 + 0.03 * fade; particles.col[k + 2] *= 0.97 + 0.03 * fade;
     if (particles.life[i] <= 0) particles.pos[k + 1] = -999;
   }
@@ -891,6 +1187,14 @@ function usePotion() {
 }
 
 function hitMonster(m, dmg, crit, nx, nz) {
+  // 霊体には通常攻撃が効かない（精髄スキルなら効く）
+  if (m.def.physImmune && player.attackKind !== 'skill') {
+    m.aggro = true;
+    const p = m.pos.clone(); p.y = 1.4 + m.def.radius;
+    popup(p, '効かない', '');
+    burst(new THREE.Vector3(m.pos.x, 1.0, m.pos.z), 0x9ad8ff, 8, 2, 1);
+    return;
+  }
   m.hp -= dmg;
   m.flash = 0.12;
   m.aggro = true;
@@ -910,12 +1214,14 @@ function killMonster(m) {
   m.bar.remove();
   world.run.kills++;
   save.kills[m.def.id] = (save.kills[m.def.id] || 0) + 1;
+  onFieldKill(m);
   burst(new THREE.Vector3(m.pos.x, 0.8, m.pos.z), 0xbfe8ff, 40, 5, 3);
-  // 魔石：必ず 1 個。等級は魔物の強さで決まる（パッシブ「漁り屋」でときどき 1 等級上がる）
-  let grade = m.stoneGrade;
-  if (grade > 1 && Math.random() < player.st.stoneGradeUpChance) grade--;
-  const a = Math.random() * Math.PI * 2;
-  placeStone(m.pos.x + Math.cos(a) * 0.6, m.pos.z + Math.sin(a) * 0.6, grade);
+  // 魔石：必ず 1 個（パッシブ「漁り屋」で個数が増える）。等級は魔物の強さで決まる
+  const count = 1 + player.st.extraStones;
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    placeStone(m.pos.x + Math.cos(a) * 0.6, m.pos.z + Math.sin(a) * 0.6, m.stoneGrade);
+  }
   // 精髄
   // 精髄はまれにしか落ちない（亀裂の主は BOSS.essenceChance）
   for (const drop of m.def.drops) {
@@ -994,7 +1300,7 @@ function updatePlayer(dt) {
   let mx = input.move.x, my = input.move.y;
   if (player.dead || player.flinch > 0) { mx = 0; my = 0; }
   const moving = Math.hypot(mx, my) > 0.1;
-  let speed = st.moveSpeed * Math.min(1, Math.hypot(mx, my));
+  let speed = st.moveSpeed * Math.min(1, Math.hypot(mx, my)) * (regionAt(player.pos)?.slow ?? 1);   // 湿地では足を取られる
   let dashing = false;
   if (moving && input.dash && player.stamina > 1) {
     speed *= F.dashMultiplier;
@@ -1082,9 +1388,15 @@ function updateMonsters(dt) {
     }
     const toP = new THREE.Vector3(player.pos.x - m.pos.x, 0, player.pos.z - m.pos.z);
     const dist = toP.length();
-    const sees = dist < def.aggroRange && lineOfSight(m.pos, player.pos);
+    // 遠くの魔物は動かさない（広い階層でも重くならないように）
+    const far = dist > 60 && !m.aggro;
+    m.model.group.visible = dist < Math.min(75, (scene.fog?.far ?? 60) + 10);   // 霧の向こうは描かない
+    if (far) continue;
+    const playerSafe = isSafeCell(Math.round(player.pos.z / T), Math.round(player.pos.x / T));
+    const sees = !playerSafe && dist < def.aggroRange && lineOfSight(m.pos, player.pos);
     if (sees) m.aggro = true;
-    if (m.aggro && dist > def.aggroRange * 1.8) m.aggro = false;
+    if (m.aggro && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
+    const prevX = m.pos.x, prevZ = m.pos.z;
     m.cooldown = Math.max(0, m.cooldown - dt);
 
     let moveDir = null, speedMul = 1;
@@ -1106,11 +1418,12 @@ function updateMonsters(dt) {
       case 'chase':
         if (m.aggro) {
           m.state = 'chase';
-          if (dist < def.attackRange && m.cooldown <= 0) {
+          if (dist < def.attackRange && m.cooldown <= 0 && (!def.ranged || sees)) {
             m.state = 'windup'; m.timer = def.windup;
             break;
           }
-          if (dist > def.attackRange * 0.8) {
+          // 遠距離攻撃の魔物は、間合いの内側では近づかない
+          if (dist > def.attackRange * (def.ranged ? 0.75 : 0.8)) {
             if (sees) moveDir = toP.clone().normalize();
             else {
               m.pathTimer -= dt;
@@ -1135,8 +1448,9 @@ function updateMonsters(dt) {
         m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * 3);
         if (m.timer <= 0) {
           m.state = 'strike'; m.timer = 0.22;
-          if (def.model === 'wolf') { m.vel.x += -Math.sin(m.facing) * 9; m.vel.z += -Math.cos(m.facing) * 9; } // 飛びかかる
-          if (dist < def.attackRange + 0.6) {
+          if (def.lunge) { m.vel.x += -Math.sin(m.facing) * 9; m.vel.z += -Math.cos(m.facing) * 9; } // 飛びかかる
+          if (def.ranged) fireProjectile(m);
+          else if (dist < def.attackRange + 0.6) {
             const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
             if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) hurtPlayer(m.attack, m.pos.x, m.pos.z);
           }
@@ -1167,8 +1481,37 @@ function updateMonsters(dt) {
     const pd = Math.hypot(m.pos.x - player.pos.x, m.pos.z - player.pos.z), pmin = def.radius + 0.45;
     if (pd < pmin && pd > 1e-4) { m.pos.x += (m.pos.x - player.pos.x) / pd * (pmin - pd); m.pos.z += (m.pos.z - player.pos.z) / pd * (pmin - pd); }
     collide(m.pos, def.radius);
+    // 魔物は安全地帯に入れない
+    if (isSafeCell(Math.round(m.pos.z / T), Math.round(m.pos.x / T))) { m.pos.x = prevX; m.pos.z = prevZ; }
 
     animateMonster(m, moveDir ? def.speed * speedMul : 0);
+  }
+}
+
+// 遠距離攻撃（矢・魔法の弾）。まっすぐ飛び、プレイヤーに当たるか壁に当たると消える（よければ当たらない）
+function fireProjectile(m) {
+  const R = m.def.ranged;
+  const from = new THREE.Vector3(m.pos.x, 1.3 * (m.def.look?.size ?? 1), m.pos.z);
+  const to = new THREE.Vector3(player.pos.x, 1.3, player.pos.z);
+  const dir = to.sub(from).normalize();
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 4), new THREE.MeshBasicMaterial({ color: R.color }));
+  mesh.position.copy(from);
+  world.root.add(mesh);
+  world.projectiles.push({ mesh, vel: dir.multiplyScalar(R.speed), damage: m.attack, from: m, life: 3 });
+}
+function updateProjectiles(dt) {
+  for (let i = world.projectiles.length - 1; i >= 0; i--) {
+    const pr = world.projectiles[i];
+    pr.life -= dt;
+    pr.mesh.position.addScaledVector(pr.vel, dt);
+    const p = pr.mesh.position;
+    let hit = false;
+    if (Math.hypot(p.x - player.pos.x, p.z - player.pos.z) < 0.6 && p.y < 2.2) { hurtPlayer(pr.damage, pr.from.pos.x, pr.from.pos.z); hit = true; }
+    if (hit || pr.life <= 0 || cellAt(p.x, p.z) === '#') {
+      burst(p.clone(), pr.mesh.material.color.getHex(), 6, 2, 1);
+      pr.mesh.parent?.remove(pr.mesh);
+      world.projectiles.splice(i, 1);
+    }
   }
 }
 
@@ -1183,7 +1526,22 @@ function animateMonster(m, speed) {
   g.rotation.y = m.facing;
   const phase = m.anim * (4 + speed * 2);
   const sw = speed > 0.1 ? Math.sin(phase) * 0.7 : 0;
-  if (m.def.model === 'wolf') {
+  if (P.kind === 'float') {
+    // 霊体：ふわふわ浮く。予備動作で腕を振り上げる
+    P.body.position.y = 0.25 + Math.sin(m.anim * 2.2) * 0.12;
+    const up = m.state === 'windup' ? -2.2 * Math.min(1, (1 - m.timer / m.def.windup) * 1.5) : m.state === 'strike' ? 0.6 : Math.sin(m.anim * 3) * 0.2;
+    P.armL.rotation.x = up; P.armR.rotation.x = up;
+  } else if (P.kind === 'worm') {
+    // 地を這う：体節が波打つ。予備動作で頭を持ち上げる
+    P.segs.forEach((sg, i) => { sg.position.x = Math.sin(m.anim * 5 - i * 0.9) * 0.15 * (speed > 0.1 ? 1.5 : 0.5); });
+    P.body.rotation.x = m.state === 'windup' ? -0.5 * Math.min(1, (1 - m.timer / m.def.windup) * 1.5) : m.state === 'strike' ? 0.2 : 0;
+  } else if (P.kind === 'tree') {
+    // 樹木：枝を振る
+    const t = m.state === 'windup' ? Math.min(1, (1 - m.timer / m.def.windup) * 1.5) : 0;
+    P.armL.rotation.x = m.state === 'windup' ? -1.8 * t : m.state === 'strike' ? 0.8 : Math.sin(m.anim * 1.5) * 0.15;
+    P.armR.rotation.x = P.armL.rotation.x;
+    P.body.rotation.z = Math.sin(m.anim * (speed > 0.1 ? 6 : 1)) * 0.05;
+  } else if (P.kind === 'quad') {
     P.legs.forEach((l, i) => { l.rotation.x = (i === 0 || i === 3 ? sw : -sw); });
     P.tail.rotation.y = Math.sin(m.anim * 6) * 0.4;
     P.head.rotation.x = m.state === 'windup' ? 0.35 : (m.state === 'strike' ? -0.3 : 0);
@@ -1194,11 +1552,11 @@ function animateMonster(m, speed) {
     if (m.state === 'windup') {
       const t = 1 - m.timer / m.def.windup;
       P.armR.rotation.x = -2.6 * Math.min(1, t * 1.5);
-      if (m.def.model === 'golem') P.armL.rotation.x = -2.6 * Math.min(1, t * 1.5);
+      if (P.twoArm) P.armL.rotation.x = -2.6 * Math.min(1, t * 1.5);
       P.body.rotation.x = 0.15 * t;
     } else if (m.state === 'strike') {
       P.armR.rotation.x = 0.8;
-      if (m.def.model === 'golem') P.armL.rotation.x = 0.8;
+      if (P.twoArm) P.armL.rotation.x = 0.8;
       P.body.rotation.x = -0.15;
     } else {
       P.armR.rotation.x += (sw * 0.6 - P.armR.rotation.x) * 0.2;
@@ -1265,8 +1623,9 @@ function updatePickups(dt) {
 // 調べられる対象（精髄オーブ・門）
 function portalLabel(p) {
   const target = floorConfig(p.target);
-  if (p.kind === 'next') return `下層への門をくぐる（${target.name}／閉鎖 ${closeDayOf(target)}日目）`;
-  if (p.kind === 'prev') return p.closed ? `上層への門 — ${target.name}はすでに閉ざされている` : `上層への門をくぐる（${target.name}／閉鎖 ${closeDayOf(target)}日目）`;
+  const where = p.label ? `${p.label}：` : '';
+  if (p.kind === 'next') return `${where}下層への門をくぐる（${target.name}／閉鎖 ${closeLabel(target)}）`;
+  if (p.kind === 'prev') return p.closed ? `上層への門 — ${target.name}はすでに閉ざされている` : `上層への門をくぐる（${target.name}／閉鎖 ${closeLabel(target)}）`;
   if (p.kind === 'rift') return '空間の裂け目に入る（次元の亀裂）';
   return `裂け目から出る（${target.name}へ戻る）`;
 }
@@ -1280,6 +1639,11 @@ function nearestInteractable() {
     const d = Math.hypot(player.pos.x - p.pos.x, player.pos.z - p.pos.z);
     if (d < 2.2 && d < bestD) { best = { type: 'portal', portal: p, label: portalLabel(p) }; bestD = d; }
   }
+  for (const st of world.steles) {
+    if (st.state !== 'sleep') continue;
+    const d = Math.hypot(player.pos.x - st.pos.x, player.pos.z - st.pos.z);
+    if (d < 2.4 && d < bestD) { best = { type: 'stele', stele: st, label: '石碑に触れる' }; bestD = d; }
+  }
   return best;
 }
 
@@ -1288,9 +1652,13 @@ function usePortal(p) {
   if (p.closed) { log(`${floorConfig(p.target).name}はすでに閉ざされている。この層の閉鎖を待つしかない。`); return; }
   const from = world.floor;
   let arrive = 'start';
+  if (p.kind === 'next') arrive = 'fromAbove';
   if (p.kind === 'prev') arrive = 'fromBelow';
   if (p.kind === 'rift') world.riftReturn = from.id;
   if (p.kind === 'back') { arrive = 'fromRift'; }
+  // 第2層のどのエリアを通ったか（第3層の到着地点と、戻る門の行き先）
+  if (p.kind === 'next' && from.depth === 2 && !from.isSpecialRift) world.run.via = from.id;
+  world.arriveFrom = from.id;
   const target = floorConfig(p.target);
   fadeTransition(() => {
     buildFloor(target, arrive);
@@ -1302,9 +1670,10 @@ function usePortal(p) {
     $('#floor-name').textContent = target.name;
     applyQuality();
     if (target.isSpecialRift) log(`${target.name}に入った。ここでは時間が止まっている。`);
-    else log(`${target.name}に着いた。この層は ${closeDayOf(target)} 日目に閉ざされる。`);
+    else log(`${target.name}に着いた。この層は突入から ${closeLabel(target)}で閉ざされる。`);
+    if (target.description) log(target.description);
     // 閉鎖済みの層に入ってしまうことはない（上層への門は閉ざされる）が、念のため判定する
-    if (checkFloorClosure(world.time.day, target.id)) endRun('closure');
+    if (checkFloorClosure(world.time.elapsed, target.id)) endRun('closure');
   });
 }
 
@@ -1320,6 +1689,132 @@ function fadeTransition(fn) {
   }, 350);
 }
 
+// ====================================================================== 階層・フィールドのギミック
+// 石碑（ゴブリンの森）：本物の石碑に触れると第3層への門が開き、残りの 7 つはただの石塊になる
+function touchStele(st) {
+  if (st.state !== 'sleep') return;
+  if (!st.isTrue) {
+    log('古びた石碑だ。触れても何も起きない。……ほかの石碑を探そう。');
+    st.touched = true;
+    const rune = st.model.getObjectByName('rune');
+    if (rune) rune.material = new THREE.MeshStandardMaterial({ color: 0x4a4a52 });
+    return;
+  }
+  const flags = runFlags(world.floor.id);
+  flags.steleOpened = world.steles.indexOf(st);
+  for (const o of world.steles) {
+    if (o === st) continue;
+    o.state = 'rubble';
+    o.model.parent?.remove(o.model);
+    o.model = makeStele(true);
+    o.model.position.set(o.pos.x, 0, o.pos.z);
+    world.root.add(o.model);
+  }
+  st.state = 'open';
+  st.model.parent?.remove(st.model);
+  removePillar(st.pillar);
+  addPortal('next', [st.r, st.c], world.floor.next);
+  burst(new THREE.Vector3(st.pos.x, 1.5, st.pos.z), 0xb07cff, 60, 4, 4);
+  log('石碑が光り、第3層への門が開いた！ ほかの石碑はただの石塊になった。');
+  autosave();
+}
+
+// 罠（ゴブリンの森）：見えない罠を踏むとダメージ。踏んだ罠は見えるようになる
+function updateTraps(dt) {
+  if (!world.traps.size || player.dead) return;
+  for (const t of world.traps.values()) t.cooldown = Math.max(0, t.cooldown - dt);
+  const t = world.traps.get(pillarKey(Math.round(player.pos.z / T), Math.round(player.pos.x / T)));
+  if (!t || t.cooldown > 0) return;
+  const p = cellCenter(t.r, t.c);
+  if (Math.hypot(player.pos.x - p.x, player.pos.z - p.z) > 1.4) return;
+  t.cooldown = 3;
+  if (!t.revealed) {
+    t.revealed = true;
+    t.model = new THREE.Group();
+    for (let i = 0; i < 9; i++) { const sp = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 4), flatMat(0x8a8a90)); sp.position.set(p.x + (i % 3 - 1) * 0.45, 0.25, p.z + (Math.floor(i / 3) - 1) * 0.45); t.model.add(sp); }
+    world.root.add(t.model);
+  }
+  const dmg = Math.round(player.st.maxHp * (world.floor.trap?.damage ?? 0.15));
+  player.invuln = 0;
+  hurtPlayer(dmg, p.x, p.z);
+  log(`罠だ！ 地面から棘が突き出た（${dmg} ダメージ）`);
+}
+
+// フィールドごとのギミック（第2層の亡者の地・第3層）
+function updateField(dt) {
+  const key = regionKeyAt(player.pos);
+  const reg = key ? world.floor.regions?.[key] : null;
+  // フィールドに入ったときに名前を出す
+  if (key && key !== world.fieldKey) {
+    if (world.fieldKey !== null && reg?.name && world.floor.id === D.FLOOR.F3) log(`${reg.name}に入った。`);
+    world.fieldKey = key;
+  }
+  const flags = runFlags(world.floor.id);
+  // 亡者の地：バンシーの泣き声
+  if (world.floor.banshee && Math.random() < dt / 25) log('どこかでバンシーのすすり泣く声が響いている……');
+  // 鋼岩の丘：魔物が最も多くなる 3 日目、地面から銀色の光の球が空へ舞う
+  if (reg?.silverOrbs && world.time.elapsed >= 48 && world.time.elapsed < 72) {
+    if (!flags.silverSeen) { flags.silverSeen = true; log('地面から銀色の光の球がいくつも空へ舞い上がっていく……。'); }
+    if (Math.random() < dt * 6) {
+      const a = Math.random() * Math.PI * 2, d = 4 + Math.random() * 14;
+      spawnParticle(new THREE.Vector3(player.pos.x + Math.cos(a) * d, 0.2, player.pos.z + Math.sin(a) * d), 0xe8f0ff, new THREE.Vector3(0, 3 + Math.random() * 2, 0), 4);
+    }
+  }
+  // 魔女の森：魔女の目が蓄積する
+  if (reg?.witchEye) {
+    const W = D.WITCH_EYE;
+    flags.witchHours = (flags.witchHours ?? 0) + dt / D.TIME.secondsPerDay * 24;
+    while (flags.witchHours >= W.hoursPerStack) { flags.witchHours -= W.hoursPerStack; addWitchEye(1); }
+    if ((flags.witchEye ?? 0) >= W.max) {
+      // 同じ場所に留まり続けると強敵が現れる
+      if (!world.idleAnchor || world.idleAnchor.distanceTo(player.pos) > W.idleRadius) { world.idleAnchor = player.pos.clone(); world.idleTime = 0; }
+      world.idleTime += dt;
+      if (world.idleTime >= W.idleSeconds) {
+        world.idleTime = 0;
+        const a = Math.random() * Math.PI * 2;
+        const p = player.pos.clone().add(new THREE.Vector3(Math.cos(a) * 6, 0, Math.sin(a) * 6));
+        collide(p, 1);
+        const m = spawnMonster(W.monster, p);
+        m.aggro = true;
+        log(`魔女の目に見つかった……！ ${D.MONSTERS[W.monster].name}が現れた！`);
+      }
+    }
+  } else world.idleAnchor = null;
+}
+function addWitchEye(n) {
+  const flags = runFlags(D.FLOOR.F3);
+  const before = flags.witchEye ?? 0;
+  flags.witchEye = Math.min(D.WITCH_EYE.max, before + n);
+  if (flags.witchEye !== before) {
+    if (flags.witchEye >= D.WITCH_EYE.max) log('魔女の目が最大になった。同じ場所に留まると、何かが来る……。');
+    else if (before === 0) log('どこからか見られている気がする……（魔女の目）');
+  }
+}
+// 魔物を倒したときのフィールドのギミック（killMonster から呼ぶ）
+function onFieldKill(m) {
+  if (world.floor.id !== D.FLOOR.F3) return;
+  const key = regionKeyAt(m.pos);
+  const reg = key ? world.floor.regions[key] : null;
+  const flags = runFlags(world.floor.id);
+  if (reg?.witchEye) addWitchEye(D.WITCH_EYE.perKill);
+  // オークの群落地：オークの討伐数で、オークヒーロー → オークロードが現れる
+  if (reg?.orcTrigger && m.def.id.startsWith('orc_')) {
+    const O = D.ORC_TRIGGER;
+    flags.orcKills = (flags.orcKills ?? 0) + 1;
+    if (m.def.id === O.hero) flags.heroDown = true;
+    const spawnBoss = (id, text) => {
+      const a = Math.random() * Math.PI * 2;
+      const p = player.pos.clone().add(new THREE.Vector3(Math.cos(a) * 10, 0, Math.sin(a) * 10));
+      collide(p, 1.2);
+      const b = spawnMonster(id, p);
+      b.aggro = true;
+      log(text);
+    };
+    if (flags.orcKills >= O.heroKills && !flags.heroSpawned) { flags.heroSpawned = true; spawnBoss(O.hero, '群落地にどよめきが走る……オークヒーローが現れた！'); }
+    if (flags.orcKills >= O.lordKills && flags.heroDown && !flags.lordSpawned) { flags.lordSpawned = true; spawnBoss(O.lord, '大地が震える。災厄――オークロードが姿を現した！'); }
+  }
+}
+
 // 日付が変わったとき：プレイヤーから離れた出現地点に魔物が湧く
 function onNewDay() {
   log(`${world.time.day} 日目になった。`);
@@ -1332,7 +1827,12 @@ function onNewDay() {
   });
   for (let i = 0; i < D.TIME.respawnPerDay && cands.length; i++) {
     const sc = cands.splice(Math.floor(Math.random() * cands.length), 1)[0];
-    spawnMonster(sc.id, cellCenter(sc.r, sc.c));
+    if (sc.id) spawnMonster(sc.id, cellCenter(sc.r, sc.c));
+    else {
+      // 群れの場所：その地域の魔物が小さな群れで湧く
+      const region = world.floor.regions?.[sc.region];
+      if (region?.monsters?.length) spawnGroup(region, sc.r, sc.c, Math.max(1, Math.floor((region.group?.[0] ?? 2) / 2)));
+    }
   }
 }
 
@@ -1433,6 +1933,13 @@ function updateHUD() {
   const ci = $('#close-info');
   ci.textContent = left === null ? (world.floor.isSpecialRift ? '時間が止まっている' : '') : `この層の閉鎖まで ${formatRemaining(left)}`;
   ci.classList.toggle('warn', left !== null && left <= D.TIME.warnHours);
+  // いる地域・フィールドと、魔女の目
+  const reg = regionAt(player.pos);
+  const eye = runFlags(world.floor.id).witchEye ?? 0;
+  const eyeHTML = world.floor.id === D.FLOOR.F3 && eye > 0 ? ` ／ <span class="eye ${eye >= D.WITCH_EYE.max ? 'max' : ''}">魔女の目 ${eye}/${D.WITCH_EYE.max}</span>` : '';
+  const fi = $('#field-info');
+  const html = (reg?.name ?? '') + eyeHTML;
+  if (fi.innerHTML !== html) fi.innerHTML = html;
   const nStones = stoneCount(world.run.stones);
   $('#stones').textContent = nStones ? `${nStones}（最高 ${bestGrade(world.run.stones)}等級）` : '0';
   $('#capacity-text').textContent = `${st.used} / ${st.capacity}`;
@@ -1544,7 +2051,10 @@ function startRun() {
   // 迷宮に入る直前の状態を残す（力尽きたらここに戻る）
   Store.savePreRun({ ...save, runInProgress: false });
   world.run = { floor: floorDef.id, stones: {}, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
-    deepest: 1, rift: false, startDay: save.day, startedAt: performance.now() };
+    deepest: 1, rift: false, startDay: save.day, startedAt: performance.now(),
+    seed: Math.floor(Math.random() * 2 ** 31) + 1,   // 地形の種（突入ごとに地形が変わる）
+    via: null,                                        // 通った第2層のエリア
+    flags: {} };
   // 都市で過ごした時刻に入場する。閉門間際なら暗黒地帯に降り立つおそれがある
   world.time.start(save.day, save.hour);
   world.entryLate = isLateEntry(save.hour);
@@ -1556,7 +2066,8 @@ function startRun() {
   buildFloor(floorDef, 'start');
   enterPlaying(floorDef);
   world.entryLate = false;
-  log(`${floorDef.name}に降り立った。この層は ${closeDayOf(floorDef)} 日目に閉ざされ、そのとき地上へ送還される。`);
+  log(`${floorDef.name}に降り立った。この層は突入から ${closeLabel(floorDef)}で閉ざされ、そのとき地上へ送還される。`);
+  if (world.abyssEvent) log('深淵の気配がする……。強大な深淵の魔物が、この層のどこかにいる。');
   if (world.landedInDark) log('閉門間際に飛び込んだせいで、暗黒地帯に降り立ってしまった……');
   autosave();
 }
@@ -1572,6 +2083,8 @@ function runSnapshot() {
     floorId: world.floor.id,
     riftReturn: world.riftReturn,
     hours: world.time.hours,
+    startHours: world.time.startHours,
+    arriveFrom: world.arriveFrom ?? null,
     run,
     player: { x: player.pos.x, z: player.pos.z, yaw: camState.yaw, hp: player.hp, stamina: player.stamina, cooldowns: player.skillCooldowns },
     portals: world.portals.map(p => ({ kind: p.kind, cell: p.cell, target: p.target, rot: p.model.group.rotation.y })),
@@ -1597,6 +2110,8 @@ function resumeRun(rs) {
   world.riftReturn = rs.riftReturn;
   world.time.start(1, 0);
   world.time.hours = rs.hours;
+  world.time.startHours = rs.startHours ?? 0;
+  world.arriveFrom = rs.arriveFrom ?? null;
   world.pendingResume = null;
   world.bootNote = '';
   prepareRun();
@@ -1735,7 +2250,7 @@ function endRun(reason, source = '') {
   let title = '', cls = 'ok', note = '';
   if (reason === 'closure') {
     title = '帰還（階層の閉鎖）';
-    note = `${world.time.day} 日目、${floorDef.name}が閉ざされ、地上へ送還された。持ち帰った魔石をすべて手に入れた。`;
+    note = `${world.time.day} 日目（突入から ${Math.floor(world.time.elapsed)} 時間）、${floorDef.name}が閉ざされ、地上へ送還された。持ち帰った魔石をすべて手に入れた。`;
     save.clears++;
   }
   if (reason === 'dead') {
@@ -1847,9 +2362,13 @@ function step(dt) {
       const it = nearestInteractable();
       if (it?.type === 'orb') openAbsorb(it.orb);
       else if (it?.type === 'portal') usePortal(it.portal);
+      else if (it?.type === 'stele') touchStele(it.stele);
     }
+    updateTraps(dt);
+    updateField(dt);
   }
   updateMonsters(dt);
+  updateProjectiles(dt);
   updatePickups(dt);
   updateParticles(dt);
   updatePopups(dt);
@@ -1921,6 +2440,8 @@ window.game = {
   get time() { return world.time; },
   setHours(h) { world.time.hours = h; },
   setCityHour(h) { save.hour = h; },
+  setElapsed(h) { world.time.hours = world.time.startHours + h; },   // 突入からの経過時間を設定する
+  closeHours() { return closeHoursOf(world.floor); },
   get landing() { return { dark: world.landedInDark, vis: visibilityAt(player.pos), glow: world.glow?.[Math.round(player.pos.z / T)]?.[Math.round(player.pos.x / T)] }; },
   portals() { return world.portals; },
   rebuild(id, arrive = 'start') { buildFloor(floorConfig(id), arrive); },
@@ -1932,6 +2453,8 @@ window.game = {
   get preRun() { return Store.loadPreRun(); },
   forceDrops(on = true) { world.forceDrops = on; },
   kill(m) { if (m.state !== 'dead') killMonster(m); },
+  spawn(id, x, z, boss = false) { return spawnMonster(id, new THREE.Vector3(x, 0, z), boss); },
+  regionKeyAt, regionAt, isSafeCell, touchStele,
   stoneCount, stoneValue,
   attack() { input.pressed.add('attack'); },
   interact() { input.pressed.add('interact'); },

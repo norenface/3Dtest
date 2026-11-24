@@ -72,81 +72,210 @@ export function makeBarbarian(colors) {
 }
 
 // ------------------------------------------------------------------ ゴブリン
-function makeGoblin() {
+// 魔物の見た目は「体の型」ごとに 1 つの関数で作り、look（色・大きさ・装備など）で作り分ける。
+// parts.kind：'biped'（二足）/ 'quad'（四足）/ 'float'（浮遊する霊体）/ 'worm'（地を這う）/ 'tree'（樹木）。アニメーションの種類を決める
+
+// ------------------------------------------------------------------ 二足（ゴブリン・ノーム・グール・スケルトン・オークなど）
+// look: skin, cloth, eye, size（全体の倍率）, build（横幅の倍率）, head（'goblin' | 'gnome' | 'skull' | 'orc' | 'hood' | 'none' | 'wolf' | 'helm'）,
+//       weapon（'club' | 'sword' | 'bow' | 'staff' | 'pick' | 'claw' | 'shield' | 'spear' | 'none'）, hunch（前かがみ）, beard, armor（鎧の色）
+function makeHumanoid(look = {}) {
+  const L = { skin: 0x6aa84f, cloth: 0x5b4636, eye: 0xffe066, size: 1, build: 1, head: 'goblin', weapon: 'club', hunch: 0, ...look };
   const g = new THREE.Group();
   const body = new THREE.Object3D(); g.add(body);
-  const skin = 0x6aa84f, cloth = 0x5b4636;
-  const legL = joint(body, -0.13, 0.5, 0), legR = joint(body, 0.13, 0.5, 0);
-  for (const leg of [legL, legR]) { const l = box(0.16, 0.5, 0.18, skin); l.position.y = -0.25; leg.add(l); }
-  const torso = box(0.5, 0.5, 0.36, cloth); torso.position.y = 0.75; body.add(torso);
+  const W = L.build;
+  const legL = joint(body, -0.13 * W, 0.5, 0), legR = joint(body, 0.13 * W, 0.5, 0);
+  for (const leg of [legL, legR]) { const l = box(0.16 * W, 0.5, 0.18, L.armor ?? L.skin); l.position.y = -0.25; leg.add(l); }
+  const torso = box(0.5 * W, 0.5, 0.36 * W, L.armor ?? L.cloth); torso.position.y = 0.75; body.add(torso);
+  body.rotation.x = L.hunch;
   const head = joint(body, 0, 1.0, 0);
-  const face = box(0.46, 0.4, 0.4, skin); face.position.y = 0.18; head.add(face);
-  const nose = box(0.1, 0.12, 0.16, 0x5a9440); nose.position.set(0, 0.14, -0.26); head.add(nose);
-  for (const s of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.34, 4), flatMat(skin));
-    ear.rotation.z = s * -1.3; ear.position.set(s * 0.32, 0.26, 0); head.add(ear);
-    const eye = box(0.08, 0.06, 0.02, 0xffe066, { emissive: 0x665500 }); eye.position.set(s * 0.11, 0.24, -0.205); head.add(eye);
-  }
-  const armL = joint(body, -0.32, 0.95, 0), armR = joint(body, 0.32, 0.95, 0);
-  for (const arm of [armL, armR]) { const a = box(0.13, 0.5, 0.14, skin); a.position.y = -0.24; arm.add(a); }
+  const eyeMat = { emissive: L.eye, emissiveIntensity: 0.8 };
+  const eyes = (y, z, gap = 0.11) => { for (const s of [-1, 1]) { const e = box(0.08, 0.06, 0.02, L.eye, eyeMat); e.position.set(s * gap, y, z); head.add(e); } };
+  if (L.head === 'goblin' || L.head === 'orc') {
+    const face = box(0.46 * (L.head === 'orc' ? 1.15 : 1), 0.4, 0.4, L.skin); face.position.y = 0.18; head.add(face);
+    const nose = box(0.1, 0.12, 0.16, L.skin); nose.position.set(0, 0.14, -0.26); head.add(nose);
+    for (const s of [-1, 1]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.08, L.head === 'orc' ? 0.2 : 0.34, 4), flatMat(L.skin));
+      ear.rotation.z = s * -1.3; ear.position.set(s * 0.32, 0.26, 0); head.add(ear);
+      if (L.head === 'orc') { const tusk = box(0.05, 0.12, 0.05, 0xf2ead0); tusk.position.set(s * 0.12, 0.04, -0.23); head.add(tusk); }
+    }
+    eyes(0.24, -0.205);
+  } else if (L.head === 'gnome') {
+    const face = box(0.38, 0.34, 0.36, L.skin); face.position.y = 0.16; head.add(face);
+    const beard = box(0.34, 0.26, 0.12, L.beard ?? 0xd8d0c0); beard.position.set(0, 0.02, -0.2); head.add(beard);
+    const hat = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.5, 6), flatMat(L.hat ?? 0xa83a2a)); hat.position.y = 0.55; head.add(hat);
+    eyes(0.22, -0.185, 0.09);
+  } else if (L.head === 'skull') {
+    const sk = box(0.36, 0.38, 0.38, L.skin); sk.position.y = 0.18; head.add(sk);
+    const jaw = box(0.28, 0.1, 0.3, L.skin); jaw.position.set(0, -0.04, -0.04); head.add(jaw);
+    eyes(0.22, -0.195, 0.09);
+  } else if (L.head === 'wolf') {
+    const sk = box(0.4, 0.38, 0.4, L.skin); sk.position.y = 0.2; head.add(sk);
+    const snout = box(0.22, 0.18, 0.3, L.cloth); snout.position.set(0, 0.12, -0.32); head.add(snout);
+    for (const s of [-1, 1]) { const ear = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.22, 4), flatMat(L.skin)); ear.position.set(s * 0.13, 0.48, 0); head.add(ear); }
+    eyes(0.28, -0.205);
+  } else if (L.head === 'hood' || L.head === 'helm') {
+    const hood = box(0.46, 0.46, 0.44, L.head === 'helm' ? (L.armor ?? 0x6a6f78) : L.cloth); hood.position.y = 0.2; head.add(hood);
+    const shade = box(0.34, 0.24, 0.02, 0x0a0a0a); shade.position.set(0, 0.18, -0.225); head.add(shade);
+    eyes(0.2, -0.235, 0.08);
+  } // 'none'：頭がない（首なしの騎士など）
+  const armL = joint(body, -0.32 * W, 0.95, 0), armR = joint(body, 0.32 * W, 0.95, 0);
+  for (const arm of [armL, armR]) { const a = box(0.13 * W, 0.5, 0.14 * W, L.armor ?? L.skin); a.position.y = -0.24; arm.add(a); }
   const weapon = joint(armR, 0, -0.48, 0);
-  const club = cyl(0.07, 0.04, 0.7, 0x7a5230); club.rotation.x = Math.PI / 2; club.position.z = -0.3; weapon.add(club);
-  return { group: g, parts: { body, legL, legR, armL, armR, head, weapon } };
+  const wcol = L.weaponColor ?? 0x7a5230;
+  if (L.weapon === 'club') { const w = cyl(0.07, 0.04, 0.7, wcol); w.rotation.x = Math.PI / 2; w.position.z = -0.3; weapon.add(w); }
+  if (L.weapon === 'sword' || L.weapon === 'spear') {
+    const len = L.weapon === 'spear' ? 1.3 : 0.8;
+    const w = box(0.06, 0.04, len, L.weaponColor ?? 0xc8ccd4, { metalness: 0.5, roughness: 0.4 }); w.position.z = -len / 2; weapon.add(w);
+  }
+  if (L.weapon === 'pick') { const h = cyl(0.03, 0.03, 0.6, 0x7a5230); h.rotation.x = Math.PI / 2; h.position.z = -0.3; weapon.add(h);
+    const t = box(0.4, 0.06, 0.06, 0x9aa0a8); t.position.z = -0.58; weapon.add(t); }
+  if (L.weapon === 'bow') { const b = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.025, 4, 10, Math.PI), flatMat(wcol)); b.rotation.y = Math.PI / 2; weapon.add(b); }
+  if (L.weapon === 'staff') { const st = cyl(0.03, 0.03, 1.2, wcol); st.position.y = 0.1; weapon.add(st);
+    const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1, 0), new THREE.MeshBasicMaterial({ color: L.magic ?? 0x9b6bff })); orb.position.y = 0.72; weapon.add(orb); }
+  if (L.weapon === 'claw') { for (const s of [-1, 0, 1]) { const c = box(0.03, 0.03, 0.2, 0xe8e2d0); c.position.set(s * 0.05, -0.02, -0.12); weapon.add(c); } }
+  if (L.shield) { const sh = box(0.08, 0.6, 0.5, L.shield); sh.position.set(-0.08, -0.4, -0.1); armL.add(sh); }
+  g.scale.setScalar(L.size);
+  return { group: g, parts: { kind: 'biped', body, legL, legR, armL, armR, head, weapon } };
 }
 
-// ------------------------------------------------------------------ ダイアウルフ
-function makeWolf() {
+// ------------------------------------------------------------------ 四足（刃狼・熊・虎・モグラなど）
+// look: fur, dark, eye, size, long（胴の長さ）, tall（脚の長さ）, blade（背の刃の色）, horns, fangs, tail（false で尾なし）
+function makeBeast(look = {}) {
+  const L = { fur: 0x5d6470, dark: 0x3b4049, eye: 0x9fd7ff, size: 1, long: 1, tall: 1, ...look };
   const g = new THREE.Group();
   const body = new THREE.Object3D(); g.add(body);
-  const fur = 0x5d6470, dark = 0x3b4049;
-  const torso = box(0.55, 0.5, 1.2, fur); torso.position.set(0, 0.75, 0.05); body.add(torso);
-  const chest = box(0.6, 0.6, 0.45, fur); chest.position.set(0, 0.8, -0.45); body.add(chest);
-  const head = joint(body, 0, 0.95, -0.7);
-  const skull = box(0.42, 0.38, 0.42, fur); skull.position.z = -0.12; head.add(skull);
-  const snout = box(0.24, 0.2, 0.34, dark); snout.position.set(0, -0.06, -0.45); head.add(snout);
+  const legH = 0.6 * L.tall, y0 = legH + 0.15;
+  const torso = box(0.55, 0.5, 1.2 * L.long, L.fur); torso.position.set(0, y0, 0.05); body.add(torso);
+  const chest = box(0.6, 0.6, 0.45, L.fur); chest.position.set(0, y0 + 0.05, -0.45 * L.long); body.add(chest);
+  if (L.blade) for (let i = 0; i < 4; i++) {
+    const b = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.34, 3), flatMat(L.blade, { metalness: 0.6, roughness: 0.3 }));
+    b.position.set(0, y0 + 0.38, -0.35 * L.long + i * 0.28 * L.long); b.rotation.x = -0.4; body.add(b);
+  }
+  const head = joint(body, 0, y0 + 0.2, -0.7 * L.long);
+  const skull = box(0.42, 0.38, 0.42, L.fur); skull.position.z = -0.12; head.add(skull);
+  const snout = box(0.24, 0.2, 0.34, L.dark); snout.position.set(0, -0.06, -0.45); head.add(snout);
   for (const s of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.22, 4), flatMat(dark)); ear.position.set(s * 0.13, 0.27, -0.05); head.add(ear);
-    const eye = box(0.07, 0.05, 0.02, 0x9fd7ff, { emissive: 0x2a6a99 }); eye.position.set(s * 0.12, 0.06, -0.335); head.add(eye);
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.22, 4), flatMat(L.dark)); ear.position.set(s * 0.13, 0.27, -0.05); head.add(ear);
+    const eye = box(0.07, 0.05, 0.02, L.eye, { emissive: L.eye, emissiveIntensity: 0.6 }); eye.position.set(s * 0.12, 0.06, -0.335); head.add(eye);
+    if (L.horns) { const h = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.4, 5), flatMat(L.horns)); h.position.set(s * 0.18, 0.25, -0.25); h.rotation.x = -0.7; head.add(h); }
+    if (L.fangs) { const f = box(0.04, 0.22, 0.04, 0xf2ead0); f.position.set(s * 0.08, -0.22, -0.55); head.add(f); }
   }
   const legs = [];
   for (const [x, z] of [[-0.2, -0.45], [0.2, -0.45], [-0.2, 0.5], [0.2, 0.5]]) {
-    const leg = joint(body, x, 0.6, z);
-    const l = box(0.14, 0.6, 0.16, dark); l.position.y = -0.3; leg.add(l);
+    const leg = joint(body, x, legH, z * L.long);
+    const l = box(0.14, legH, 0.16, L.dark); l.position.y = -legH / 2; leg.add(l);
     legs.push(leg);
   }
-  const tail = joint(body, 0, 0.9, 0.65);
-  const t = box(0.12, 0.12, 0.6, fur); t.position.z = 0.28; tail.add(t);
+  const tail = joint(body, 0, y0 + 0.15, 0.65 * L.long);
+  if (L.tail !== false) { const t = box(0.12, 0.12, 0.6, L.fur); t.position.z = 0.28; tail.add(t); }
   tail.rotation.x = 0.5;
-  return { group: g, parts: { body, head, legs, tail, legL: legs[0], legR: legs[1], armL: legs[2], armR: legs[3] } };
+  g.scale.setScalar(L.size);
+  return { group: g, parts: { kind: 'quad', body, head, legs, tail, legL: legs[0], legR: legs[1], armL: legs[2], armR: legs[3] } };
 }
 
-// ------------------------------------------------------------------ ストーンゴーレム
-function makeGolem() {
+// ------------------------------------------------------------------ 大型の人型（ゴーレム・石像・巨石兵・サンドマン・ウッドマン）
+// look: stone, dark, glow（目と亀裂の色）, size
+function makeGolem(look = {}) {
+  const L = { stone: 0x8a8377, dark: 0x5e584f, glow: 0xffa040, size: 1, ...look };
   const g = new THREE.Group();
   const body = new THREE.Object3D(); g.add(body);
-  const stone = 0x8a8377, dark = 0x5e584f;
   const legL = joint(body, -0.4, 1.0, 0), legR = joint(body, 0.4, 1.0, 0);
-  for (const leg of [legL, legR]) { const l = box(0.5, 1.0, 0.55, dark); l.position.y = -0.5; leg.add(l); }
-  const torso = box(1.4, 1.1, 0.9, stone); torso.position.y = 1.6; body.add(torso);
-  const crack = box(0.5, 0.08, 0.02, 0xffa040, { emissive: 0xff7a00, emissiveIntensity: 1.2 }); crack.position.set(0.1, 1.7, -0.46); body.add(crack);
+  for (const leg of [legL, legR]) { const l = box(0.5, 1.0, 0.55, L.dark); l.position.y = -0.5; leg.add(l); }
+  const torso = box(1.4, 1.1, 0.9, L.stone); torso.position.y = 1.6; body.add(torso);
+  if (L.glow) { const crack = box(0.5, 0.08, 0.02, L.glow, { emissive: L.glow, emissiveIntensity: 1.2 }); crack.position.set(0.1, 1.7, -0.46); body.add(crack); }
   const head = joint(body, 0, 2.2, -0.1);
-  const h = box(0.6, 0.5, 0.55, stone); h.position.y = 0.2; head.add(h);
-  for (const s of [-1, 1]) {
-    const eye = box(0.12, 0.07, 0.02, 0xffb347, { emissive: 0xff8800, emissiveIntensity: 1.5 }); eye.position.set(s * 0.14, 0.25, -0.285); head.add(eye);
-  }
+  if (!L.headless) {
+    const h = box(0.6, 0.5, 0.55, L.stone); h.position.y = 0.2; head.add(h);
+    for (const s of [-1, 1]) {
+      const eye = box(0.12, 0.07, 0.02, L.glow ?? 0x222222, L.glow ? { emissive: L.glow, emissiveIntensity: 1.5 } : {}); eye.position.set(s * 0.14, 0.25, -0.285); head.add(eye);
+    }
+  } else head.rotation.z = 0.9;   // 首の折れた石像
   const armL = joint(body, -0.9, 2.0, 0), armR = joint(body, 0.9, 2.0, 0);
   for (const arm of [armL, armR]) {
-    const a = box(0.45, 1.2, 0.5, stone); a.position.y = -0.55; arm.add(a);
-    const fist = box(0.6, 0.5, 0.6, dark); fist.position.y = -1.25; arm.add(fist);
+    const a = box(0.45, 1.2, 0.5, L.stone); a.position.y = -0.55; arm.add(a);
+    const fist = box(0.6, 0.5, 0.6, L.dark); fist.position.y = -1.25; arm.add(fist);
   }
-  return { group: g, parts: { body, legL, legR, armL, armR, head } };
+  g.scale.setScalar(L.size);
+  return { group: g, parts: { kind: 'biped', twoArm: true, body, legL, legR, armL, armR, head } };
 }
 
-export function makeMonster(model) {
-  if (model === 'goblin') return makeGoblin();
-  if (model === 'wolf') return makeWolf();
-  if (model === 'golem') return makeGolem();
-  throw new Error('unknown model ' + model);
+// ------------------------------------------------------------------ 浮遊する霊体（レイス・バンシー・フェアリー・ランプ・精霊）
+// look: color, glow, size, style（'cloak' | 'fairy' | 'lamp' | 'wisp'）, opacity
+function makeSpirit(look = {}) {
+  const L = { color: 0x9aa8c8, glow: 0xbfe8ff, size: 1, style: 'cloak', opacity: 0.75, ...look };
+  const g = new THREE.Group();
+  const body = new THREE.Object3D(); g.add(body);
+  const mat = new THREE.MeshStandardMaterial({ color: L.color, emissive: L.glow, emissiveIntensity: 0.35, transparent: true, opacity: L.opacity, flatShading: true });
+  const head = joint(body, 0, 1.55, 0);
+  const armL = joint(body, -0.35, 1.25, 0), armR = joint(body, 0.35, 1.25, 0);
+  if (L.style === 'cloak') {
+    const robe = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.3, 7, 1, true), mat); robe.position.y = 0.85; body.add(robe);
+    const hood = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24, 0), mat); head.add(hood);
+    for (const s of [-1, 1]) { const e = box(0.06, 0.04, 0.02, L.glow, { emissive: L.glow, emissiveIntensity: 1.5 }); e.position.set(s * 0.08, 0, -0.22); head.add(e); }
+    for (const arm of [armL, armR]) { const a = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.55, 5), mat); a.rotation.x = Math.PI; a.position.y = -0.25; arm.add(a); }
+  } else if (L.style === 'fairy') {
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), new THREE.MeshBasicMaterial({ color: L.glow })); core.position.y = 1.3; body.add(core);
+    for (const s of [-1, 1]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.25), new THREE.MeshBasicMaterial({ color: L.color, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+      w.position.set(s * 0.22, 1.35, 0.05); w.rotation.y = s * 0.5; (s < 0 ? armL : armR).add(w); w.position.set(s * 0.1, 0.1, 0.05); }
+  } else if (L.style === 'lamp') {
+    const cage = box(0.32, 0.42, 0.32, 0x3a3328); cage.position.y = 1.2; body.add(cage);
+    const flame = new THREE.Mesh(new THREE.IcosahedronGeometry(0.15, 0), new THREE.MeshBasicMaterial({ color: L.glow })); flame.position.y = 1.2; body.add(flame);
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.02, 4, 8, Math.PI), flatMat(0x3a3328)); handle.position.y = 1.45; body.add(handle);
+  } else { // wisp
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), mat); core.position.y = 1.3; body.add(core);
+    const inner = new THREE.Mesh(new THREE.IcosahedronGeometry(0.14, 0), new THREE.MeshBasicMaterial({ color: L.glow })); inner.position.y = 1.3; body.add(inner);
+  }
+  g.scale.setScalar(L.size);
+  return { group: g, parts: { kind: 'float', body, head, armL, armR, legL: joint(body, 0, 0, 0), legR: joint(body, 0, 0, 0) } };
+}
+
+// ------------------------------------------------------------------ 地を這う（サンドワーム・デスワーム）
+function makeWorm(look = {}) {
+  const L = { skin: 0xc9a46a, dark: 0x8a6a3a, mouth: 0x5a1a1a, size: 1, segs: 6, ...look };
+  const g = new THREE.Group();
+  const body = new THREE.Object3D(); g.add(body);
+  const segs = [];
+  for (let i = 0; i < L.segs; i++) {
+    const r = 0.45 - i * 0.035;
+    const sgm = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), flatMat(i % 2 ? L.dark : L.skin));
+    sgm.castShadow = true;
+    sgm.position.set(0, r, i * 0.55); body.add(sgm); segs.push(sgm);
+  }
+  const head = joint(body, 0, 0.5, -0.3);
+  const mouth = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.3, 0.3, 8), flatMat(L.mouth)); mouth.rotation.x = Math.PI / 2; head.add(mouth);
+  for (let i = 0; i < 6; i++) { const t = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.2, 3), flatMat(0xf2ead0)); const a = i / 6 * Math.PI * 2;
+    t.position.set(Math.cos(a) * 0.3, Math.sin(a) * 0.3, -0.15); t.rotation.x = -Math.PI / 2; head.add(t); }
+  g.scale.setScalar(L.size);
+  const dummy = () => joint(body, 0, 0, 0);
+  return { group: g, parts: { kind: 'worm', body, head, segs, legL: dummy(), legR: dummy(), armL: dummy(), armR: dummy() } };
+}
+
+// ------------------------------------------------------------------ 樹木（蛇樹・人喰い樹・ドライアドの樹）
+function makeTree(look = {}) {
+  const L = { bark: 0x5a4030, leaf: 0x3f6a32, eye: 0xffd24a, size: 1, ...look };
+  const g = new THREE.Group();
+  const body = new THREE.Object3D(); g.add(body);
+  const trunk = cyl(0.35, 0.5, 2.2, L.bark, 7); trunk.position.y = 1.1; body.add(trunk);
+  const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.0, 0), flatMat(L.leaf)); crown.position.y = 2.6; crown.castShadow = true; body.add(crown);
+  const head = joint(body, 0, 1.6, -0.3);
+  for (const s of [-1, 1]) { const e = box(0.12, 0.08, 0.02, L.eye, { emissive: L.eye, emissiveIntensity: 1.2 }); e.position.set(s * 0.13, 0, -0.06); head.add(e); }
+  const mouth = box(0.3, 0.08, 0.02, 0x1a0a05); mouth.position.set(0, -0.25, -0.06); head.add(mouth);
+  const armL = joint(body, -0.4, 1.8, 0), armR = joint(body, 0.4, 1.8, 0);
+  for (const [arm, s] of [[armL, -1], [armR, 1]]) { const a = cyl(0.08, 0.12, 1.2, L.bark, 5); a.position.set(s * 0.3, -0.4, 0); a.rotation.z = s * 0.7; arm.add(a); }
+  const legL = joint(body, 0, 0, 0), legR = joint(body, 0, 0, 0);
+  g.scale.setScalar(L.size);
+  return { group: g, parts: { kind: 'tree', twoArm: true, body, head, armL, armR, legL, legR } };
+}
+
+const FAMILIES = { humanoid: makeHumanoid, beast: makeBeast, golem: makeGolem, spirit: makeSpirit, worm: makeWorm, tree: makeTree };
+// 以前の名前（goblin / wolf）も使えるようにしておく
+FAMILIES.goblin = makeHumanoid;
+FAMILIES.wolf = makeBeast;
+
+export function makeMonster(model, look) {
+  const f = FAMILIES[model];
+  if (!f) throw new Error('unknown model ' + model);
+  return f(look);
 }
 
 // ------------------------------------------------------------------ アイテム

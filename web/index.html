@@ -36,6 +36,9 @@
   #timer { font-size: 22px; }
   #close-info { font-size: 12px; color: var(--muted); }
   #close-info.warn { color: var(--danger); font-weight: 700; animation: pulse 1s infinite; }
+  #field-info { font-size: 12px; color: #cfe0ff; }
+  #field-info .eye { color: #c89aff; font-weight: 700; }
+  #field-info .eye.max { color: var(--danger); animation: pulse 1s infinite; }
   #fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity .3s; }
   #fade.on { opacity: 1; }
   @keyframes pulse { 50% { opacity: .55; } }
@@ -197,6 +200,7 @@
         <div id="floor-name"></div>
         <div id="timer">Day 1</div>
         <div id="close-info"></div>
+        <div id="field-info"></div>
       </div>
       <div class="right-info">
         <div>魔石 <b id="stones">0</b></div>
