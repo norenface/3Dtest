@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import * as D from './data.js';
 import { Input } from './input.js';
 import * as Store from './storage.js';
+import { normalizeStones, addStone, mergeStones, stoneCount, stoneValue, bestGrade, stoneText, stoneGradeFor } from './stones.js';
 import { openHub, hubClockChanged } from './hub.js';
 import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makePortal, flatMat } from './models.js';
 import { TimeManager, floorConfig, closeDayOf, checkFloorClosure, formatRemaining, isGateOpen, isLateEntry, formatClock } from './time.js';
@@ -90,7 +91,7 @@ function computeStats() {
     meleeMultiplier: mult('', 'meleeDamageMultiplier'),
     damageTakenMultiplier: mult('', 'damageTakenMultiplier') * armor.damageTakenMultiplier,
     flinchMultiplier: mult('', 'flinchMultiplier'),
-    extraStones: extra('extraStones'),
+    stoneGradeUpChance: extra('stoneGradeUpChance'),
   };
 }
 
@@ -544,7 +545,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
       mon.hp = Math.min(mon.maxHp, m.hp);
     }
     for (const o of restore.orbs) placeOrb(o.id, o.x, o.z);
-    for (const [x, z] of restore.stones) placeStone(x, z);
+    for (const [x, z, grade] of restore.stones) placeStone(x, z, grade ?? 9);
   } else {
     for (const [r, c] of floorCells) {
       const id = floorDef.monsterTable[world.grid[r][c]];
@@ -603,8 +604,8 @@ function spawnMonster(id, pos, boss = false) {
   const base = D.MONSTERS[id];
   const def = boss ? { ...base, name: `${B.title}（${base.name}）`, radius: base.radius * B.size, attackRange: base.attackRange * B.size,
     knockbackResist: Math.max(base.knockbackResist, 0.9) } : base;
-  const s0 = world.floor.monsterScale ?? { hp: 1, attack: 1, stones: 1 };
-  const scale = boss ? { hp: s0.hp * B.hp, attack: s0.attack * B.attack, stones: s0.stones * B.stones } : s0;
+  const s0 = world.floor.monsterScale ?? { hp: 1, attack: 1 };
+  const scale = boss ? { hp: s0.hp * B.hp, attack: s0.attack * B.attack } : s0;
   const model = makeMonster(def.model);
   if (boss) model.group.scale.setScalar(B.size);
   // 被弾時に個体ごと光らせるため、マテリアルを複製する
@@ -623,7 +624,7 @@ function spawnMonster(id, pos, boss = false) {
     pos: pos.clone(), home: pos.clone(), vel: new THREE.Vector3(), facing: Math.random() * Math.PI * 2,
     hp: Math.round(def.hp * scale.hp), maxHp: Math.round(def.hp * scale.hp),
     attack: Math.round(def.attack * scale.attack),
-    stones: Math.max(1, Math.round(def.stones * scale.stones)),   // 魔石は必ず落とす（強いほど多い）
+    stoneGrade: stoneGradeFor(id, world.floor, boss),   // 落とす魔石の等級（強いほど高い）
     boss,
     state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10, stun: 0,
     path: null, pathTimer: 0, aggro: false, wanderTarget: null, deadTimer: 0,
@@ -910,12 +911,11 @@ function killMonster(m) {
   world.run.kills++;
   save.kills[m.def.id] = (save.kills[m.def.id] || 0) + 1;
   burst(new THREE.Vector3(m.pos.x, 0.8, m.pos.z), 0xbfe8ff, 40, 5, 3);
-  // 魔石
-  const count = m.stones + player.st.extraStones;
-  for (let i = 0; i < count; i++) {
-    const a = Math.random() * Math.PI * 2;
-    placeStone(m.pos.x + Math.cos(a) * 0.6, m.pos.z + Math.sin(a) * 0.6);
-  }
+  // 魔石：必ず 1 個。等級は魔物の強さで決まる（パッシブ「漁り屋」でときどき 1 等級上がる）
+  let grade = m.stoneGrade;
+  if (grade > 1 && Math.random() < player.st.stoneGradeUpChance) grade--;
+  const a = Math.random() * Math.PI * 2;
+  placeStone(m.pos.x + Math.cos(a) * 0.6, m.pos.z + Math.sin(a) * 0.6, grade);
   // 精髄
   // 精髄はまれにしか落ちない（亀裂の主は BOSS.essenceChance）
   for (const drop of m.def.drops) {
@@ -924,11 +924,11 @@ function killMonster(m) {
   }
 }
 
-function placeStone(x, z) {
-  const s = makeMagicStone();
+function placeStone(x, z, grade = 9) {
+  const s = makeMagicStone(D.STONE_GRADES[grade].color, 1 + (9 - grade) * 0.08);
   s.group.position.set(x, 0, z);
   world.root.add(s.group);
-  world.stones.push({ model: s, pos: s.group.position, t: Math.random() * 5 });
+  world.stones.push({ model: s, pos: s.group.position, t: Math.random() * 5, grade });
 }
 
 function placeOrb(id, x, z) {
@@ -1233,9 +1233,9 @@ function updatePickups(dt) {
     if (d < 0.7) {
       g.parent?.remove(g);
       world.stones.splice(i, 1);
-      world.run.stones++;
+      addStone(world.run.stones, s.grade);
       const p = player.pos.clone(); p.y = 2;
-      popup(p, '+1 魔石', 'gain');
+      popup(p, `+${s.grade}等級魔石`, 'gain');
     }
   }
   // 精髄オーブ：浮かんで回る
@@ -1433,7 +1433,8 @@ function updateHUD() {
   const ci = $('#close-info');
   ci.textContent = left === null ? (world.floor.isSpecialRift ? '時間が止まっている' : '') : `この層の閉鎖まで ${formatRemaining(left)}`;
   ci.classList.toggle('warn', left !== null && left <= D.TIME.warnHours);
-  $('#stones').textContent = world.run.stones;
+  const nStones = stoneCount(world.run.stones);
+  $('#stones').textContent = nStones ? `${nStones}（最高 ${bestGrade(world.run.stones)}等級）` : '0';
   $('#capacity-text').textContent = `${st.used} / ${st.capacity}`;
   const pips = $('#capacity-pips');
   if (pips.children.length !== st.capacity) pips.innerHTML = '<i></i>'.repeat(st.capacity);
@@ -1488,7 +1489,7 @@ function showTitle() {
     ${world.bootNote ? `<div class="warn-text" style="margin-bottom:8px">${world.bootNote}</div>` : ''}
     <div class="kv"><span>暦</span><span>第${save.cycle}周期 Day ${save.day}${save.day === 1 ? ' ' + formatClock(save.hour) : ''}（地上ゲート${isGateOpen(save.day, save.hour) ? '開放中' : '閉鎖中'}）</span></div>
     <div class="kv"><span>種族</span><span>${race.name}</span></div>
-    <div class="kv"><span>ゴールド / 魔石</span><span>${save.gold} G / ${save.stones} 個</span></div>
+    <div class="kv"><span>ゴールド / 魔石</span><span>${save.gold} G / ${stoneCount(save.stones)} 個</span></div>
     <div class="kv"><span>探索回数 / 帰還成功</span><span>${save.runs} / ${save.clears}</span></div>
     ${statusSummaryHTML()}`;
   $('#btn-start').textContent = world.pendingResume ? '続きから（探索を再開）' : 'はじめる（拠点へ）';
@@ -1542,7 +1543,7 @@ function startRun() {
   const floorDef = floorConfig(1);
   // 迷宮に入る直前の状態を残す（力尽きたらここに戻る）
   Store.savePreRun({ ...save, runInProgress: false });
-  world.run = { floor: floorDef.id, stones: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
+  world.run = { floor: floorDef.id, stones: {}, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
     deepest: 1, rift: false, startDay: save.day, startedAt: performance.now() };
   // 都市で過ごした時刻に入場する。閉門間際なら暗黒地帯に降り立つおそれがある
   world.time.start(save.day, save.hour);
@@ -1577,7 +1578,7 @@ function runSnapshot() {
     monsters: world.monsters.filter(m => m.state !== 'dead')
       .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss })),
     orbs: world.orbs.map(o => ({ id: o.id, x: o.pos.x, z: o.pos.z })),
-    stones: world.stones.map(st => [st.pos.x, st.pos.z]),
+    stones: world.stones.map(st => [st.pos.x, st.pos.z, st.grade]),
   };
 }
 function autosave() {
@@ -1592,7 +1593,7 @@ addEventListener('pagehide', () => autosave());
 // 前回の続きから再開する
 function resumeRun(rs) {
   const floorDef = floorConfig(rs.floorId);
-  world.run = { ...rs.run, startedAt: performance.now() };
+  world.run = { ...rs.run, stones: normalizeStones(rs.run.stones), startedAt: performance.now() };
   world.riftReturn = rs.riftReturn;
   world.time.start(1, 0);
   world.time.hours = rs.hours;
@@ -1654,11 +1655,12 @@ function openAbsorb(orb) {
     closeModal();
   };
   $('#btn-crush').onclick = () => {
-    const n = 2 + e.cost;
-    world.run.stones += n;
+    // 精髄と同じ等級（rank）の魔石 1 個になる
+    const g = e.rank;
+    addStone(world.run.stones, g);
     removeOrb(orb);
-    burst(new THREE.Vector3(orb.pos.x, 1.0, orb.pos.z), 0x55c8ff, 30, 3, 3);
-    log(`${e.name}を砕いた。魔石 +${n}`);
+    burst(new THREE.Vector3(orb.pos.x, 1.0, orb.pos.z), D.STONE_GRADES[g].color, 30, 3, 3);
+    log(`${e.name}を砕いた。${g}等級の魔石を手に入れた`);
     closeModal();
   };
   $('#btn-leave').onclick = closeModal;
@@ -1741,7 +1743,7 @@ function endRun(reason, source = '') {
     const pre = Store.loadPreRun();
     const runs = save.runs;
     if (pre) save = { ...pre, runs };
-    kept = 0; title = '力尽きた'; cls = 'ng';
+    kept = {}; title = '力尽きた'; cls = 'ng';
     note = pre ? `迷宮に入る直前（第${save.cycle}周期 Day ${save.day}）に戻った。所持品・装備・精髄・ステータスは出発前の状態になった。`
       : 'この探索で得た魔石はすべて失われた。';
   }
@@ -1750,7 +1752,7 @@ function endRun(reason, source = '') {
     note = `${world.time.day} 日目、${source}の力で地上へ戻った。持ち帰った魔石をすべて手に入れた。`;
     save.clears++;
   }
-  save.stones += kept;
+  save.stones = mergeStones({ ...save.stones }, kept);
   save.runs++;
   // 都市の日付を、迷宮を出た日に合わせる（地上ゲートは次の開放日まで閉じている）。力尽きたときは出発前の日付のまま
   if (reason !== 'dead') {
@@ -1768,14 +1770,14 @@ function endRun(reason, source = '') {
     <div class="kv" style="margin-top:12px"><span>最後にいた階層 / 到達した最深層</span><span>${floorDef.name} / 第${run.deepest}層${run.rift ? '（亀裂にも入った）' : ''}</span></div>
     <div class="kv"><span>迷宮にいた期間</span><span>Day ${run.startDay} → Day ${world.time.day}</span></div>
     <div class="kv"><span>倒した敵</span><span>${run.kills}</span></div>
-    <div class="kv"><span>持ち帰った魔石</span><span>${kept}（所持 ${save.stones}）</span></div>
+    <div class="kv"><span>持ち帰った魔石</span><span>${stoneText(kept)}${stoneCount(kept) ? `（${stoneValue(kept)} G 相当）` : ''}</span></div>
     <div class="kv"><span>吸収した精髄</span><span>${run.absorbed.map(id => D.ESSENCES[id].name).join('・') || 'なし'}${reason === 'dead' && run.absorbed.length ? '（出発前に戻ったため失われた）' : ''}</span></div>
     <div class="kv"><span>使ったスキル / 回復薬</span><span>${run.skillsUsed} 回 / ${run.potionsUsed} 個</span></div>
     <div class="btns row">
       <button class="btn primary" id="btn-to-hub">拠点へ戻る</button>
     </div>`;
   show('#result-screen');
-  $('#btn-to-hub').onclick = () => showHub(`${title}。${kept > 0 ? `魔石 ${kept} 個を持ち帰った。` : ''}${reason === 'dead' ? '地上ゲートはまだ開いている。' : ''}`);
+  $('#btn-to-hub').onclick = () => showHub(`${title}。${stoneCount(kept) ? `魔石を持ち帰った（${stoneText(kept)}）。` : ''}${reason === 'dead' ? '地上ゲートはまだ開いている。' : ''}`);
 }
 
 document.addEventListener('pointerlockchange', () => {
@@ -1930,6 +1932,7 @@ window.game = {
   get preRun() { return Store.loadPreRun(); },
   forceDrops(on = true) { world.forceDrops = on; },
   kill(m) { if (m.state !== 'dead') killMonster(m); },
+  stoneCount, stoneValue,
   attack() { input.pressed.add('attack'); },
   interact() { input.pressed.add('interact'); },
   stats() { return computeStats(); },

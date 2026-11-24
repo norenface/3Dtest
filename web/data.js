@@ -45,7 +45,7 @@ export const FORMULA = {
 export const PASSIVES = {
   pain_resistance: { name: '痛覚耐性', description: '被弾時の怯み時間が半分になる。', flinchMultiplier: 0.5 },
   heavy_build: { name: '重量級の体躯', description: '近接攻撃のダメージ +10%。', meleeDamageMultiplier: 1.1 },
-  scavenger: { name: '漁り屋', description: '倒した敵の魔石が 1 個増える。', extraStones: 1 },
+  scavenger: { name: '漁り屋', description: '倒した敵の魔石が、ときどき 1 等級上のものになる（30%）。', stoneGradeUpChance: 0.3 },
   swift_feet: { name: '俊足', description: '移動速度 +12%。', moveSpeedMultiplier: 1.12 },
   stone_skin: { name: '岩の皮膚', description: '受けるダメージ -15%。', damageTakenMultiplier: 0.85 },
 };
@@ -105,7 +105,7 @@ export const ESSENCES = {
 
 // ------------------------------------------------------------------ モンスター
 // model: game の models.js で使う見た目の種類
-// stones: 倒したときに必ず落とす魔石の数（強い魔物ほど多い。階層の monsterScale.stones を掛ける）
+// grade: 魔物の等級（9 がいちばん弱い）。倒すと必ず魔石を 1 個落とし、その等級は 魔物の等級 − 階層の gradeUp（亀裂の主はさらに BOSS.gradeUp）
 // drops: 精髄のドロップ率。精髄はまず落ちないレア（通常の魔物は 0.1〜1%）。亀裂の主（ボス）は BOSS.essenceChance で落とす
 export const MONSTERS = {
   goblin: {
@@ -113,7 +113,7 @@ export const MONSTERS = {
     hp: 30, attack: 7, defense: 0, speed: 3.0,
     aggroRange: 11, attackRange: 1.6, windup: 0.45, attackCooldown: 1.2,
     radius: 0.45, knockbackResist: 0,
-    stones: 1,
+    grade: 9,
     drops: [{ essence: 'essence_goblin', chance: 0.01 }],    // 1%
   },
   wolf: {
@@ -121,7 +121,7 @@ export const MONSTERS = {
     hp: 40, attack: 9, defense: 1, speed: 5.0,
     aggroRange: 14, attackRange: 1.9, windup: 0.35, attackCooldown: 1.0,
     radius: 0.55, knockbackResist: 0.2,
-    stones: 2,
+    grade: 8,
     drops: [{ essence: 'essence_wolf', chance: 0.005 }],     // 0.5%
   },
   golem: {
@@ -129,14 +129,27 @@ export const MONSTERS = {
     hp: 95, attack: 16, defense: 5, speed: 1.7,
     aggroRange: 9, attackRange: 2.2, windup: 0.9, attackCooldown: 2.0,
     radius: 0.85, knockbackResist: 0.8,
-    stones: 4,
+    grade: 7,
     drops: [{ essence: 'essence_golem', chance: 0.002 }],    // 0.2%
   },
 };
 
 // 亀裂の主（次元の亀裂にいるボス）。マップの X の場所に bossMonster が現れる。
 // 通常の個体より強く大きく、魔石を多く落とし、essenceChance の確率で精髄を落とす
-export const BOSS = { title: '亀裂の主', hp: 3.0, attack: 1.3, size: 1.4, stones: 3, essenceChance: 0.33 };
+export const BOSS = { title: '亀裂の主', hp: 3.0, attack: 1.3, size: 1.4, gradeUp: 2, essenceChance: 0.33 };
+
+// 魔石の等級（9 等級がいちばん下、1 等級がいちばん上）。price: 買取価格（ゴールド） / color: 見た目の色
+export const STONE_GRADES = {
+  9: { price: 10, color: 0x55c8ff },
+  8: { price: 25, color: 0x5fe8b0 },
+  7: { price: 60, color: 0x9be86a },
+  6: { price: 140, color: 0xe8e15a },
+  5: { price: 320, color: 0xffb347 },
+  4: { price: 700, color: 0xff7a5a },
+  3: { price: 1500, color: 0xff5aa8 },
+  2: { price: 3200, color: 0xc77dff },
+  1: { price: 7000, color: 0xffffff },
+};
 
 // ------------------------------------------------------------------ 時間（迷宮の開閉・階層閉鎖のサイクル）
 // 地上ゲートは cycleDays 日ごとに開く。開放日（各周期の 1 日目）の 0:00〜gateOpenHours 時だけ入場できる。
@@ -170,7 +183,7 @@ export const TIME = {
 // depth: 階層番号 N（閉鎖日の計算に使う） / closeDay: 指定すると閉鎖日を個別に上書き
 // nextPortalSpawnRate / prevPortalSpawnRate / riftPortalSpawnRate: 各候補地点に門が現れる確率
 //   （下層への門は、確率で 1 つも出なかった場合でも 1 つは必ず出す）
-// monsterScale: 魔物の強さ・魔石の倍率
+// monsterScale: 魔物の強さの倍率 / gradeUp: 落とす魔石の等級がいくつ上がるか
 // isSpecialRift: 特殊な亀裂。timeMode が 'stopped'（中では時間が止まる）か 'surface'（地上と同じ時間が流れる）
 export const TILE_SIZE = 4.0;
 export const WALL_HEIGHT = 3.5;
@@ -233,7 +246,8 @@ export const FLOORS = [
       '###################################',
     ],
     monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
-    monsterScale: { hp: 1, attack: 1, stones: 1 },
+    gradeUp: 0,            // 魔石の等級の上がり幅（深い層ほど強い個体＝高い等級の魔石）
+    monsterScale: { hp: 1, attack: 1 },
     // mode 'crystal'：ライトクリスタルの周りだけが明るい（松明はない）。darkFog：暗黒地帯での見通し（m）
     lighting: { mode: 'crystal', ambient: 0x4a6aa8, ambientIntensity: 0.55, fog: 0x01030a, torchColor: 0xffa860,
       crystalColor: 0x7fd4ff, darkFog: 6, litFog: 44 },
@@ -258,7 +272,8 @@ export const FLOORS = [
       '###############',
     ],
     monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
-    monsterScale: { hp: 1.45, attack: 1.35, stones: 1.5 },
+    gradeUp: 1,
+    monsterScale: { hp: 1.45, attack: 1.35 },
     lighting: { ambient: 0x4f7a5c, ambientIntensity: 2.4, fog: 0x060a07, torchColor: 0xc8ff9a },
   },
   {
@@ -280,7 +295,8 @@ export const FLOORS = [
       '#################',
     ],
     monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
-    monsterScale: { hp: 2.0, attack: 1.7, stones: 2.2 },
+    gradeUp: 2,
+    monsterScale: { hp: 2.0, attack: 1.7 },
     lighting: { ambient: 0x8a5a48, ambientIntensity: 2.4, fog: 0x0c0605, torchColor: 0xff7a3a },
   },
   {
@@ -302,7 +318,8 @@ export const FLOORS = [
       '#################',
     ],
     monsterTable: { g: 'goblin', w: 'wolf', G: 'golem' },
-    monsterScale: { hp: 2.7, attack: 2.1, stones: 3.0 },
+    gradeUp: 3,
+    monsterScale: { hp: 2.7, attack: 2.1 },
     lighting: { ambient: 0x5a4f88, ambientIntensity: 2.2, fog: 0x07060c, torchColor: 0xb08cff },
   },
   {
@@ -323,7 +340,8 @@ export const FLOORS = [
     ],
     monsterTable: { g: 'goblin', w: 'wolf', G: 'golem', X: 'golem' },
     bossMonster: 'X',      // X の場所の魔物は「亀裂の主」（BOSS）
-    monsterScale: { hp: 2.2, attack: 1.8, stones: 3.0 },
+    gradeUp: 2,
+    monsterScale: { hp: 2.2, attack: 1.8 },
     lighting: { ambient: 0x7a3a6a, ambientIntensity: 2.4, fog: 0x0c040a, torchColor: 0xff5ad8 },
   },
 ];
@@ -346,7 +364,7 @@ export const LORE = [
     text: '第2層には、まれに空間の裂け目が口を開ける。裂け目の中では時が止まり、層の閉鎖も届かない。' +
           '強い魔物がひしめき、奥には亀裂の主が待つ。主はめったに出ない精髄を三度に一度は落とすという。入口の門から元の層へ戻れる。' },
   { id: 'lore_goblin', title: '小鬼の精髄', price: 60, unlock: { kills: 'goblin', count: 5 },
-    text: '小鬼の精髄は器をほとんど使わない。器用さが増し、獲物から多くの魔石を剥ぎ取れるようになる。' +
+    text: '小鬼の精髄は器をほとんど使わない。器用さが増し、獲物から質の良い魔石を剥ぎ取れるようになる。' +
           '急所突きは、ひるんだ相手にこそ真価を発揮する。' },
   { id: 'lore_wolf', title: '灰色の狼', price: 80, unlock: { kills: 'wolf', count: 3 },
     text: '狼は飛びかかる直前に頭を低く下げる。その瞬間に横へ跳べ。' +
@@ -359,7 +377,7 @@ export const LORE = [
 // ------------------------------------------------------------------ 拠点（換金・商店）
 export const HUB = {
   name: '冒険者の宿場',
-  stonePrice: 10,                 // 魔石 1 個の買取価格（ゴールド）
+  // 魔石の買取価格は STONE_GRADES（等級ごと）
   potion: { name: '回復薬', description: '最大 HP の 50% を回復する。迷宮で R キー／回復ボタン。', price: 30, heal: 0.5, max: 3, cooldown: 1.0 },
   oblivion: { name: '忘却の霊薬', description: '吸収した精髄を 1 つ魂から取り除く。とても貴重。', price: 400 },
   // 迷宮から地上へ戻る手段は「階層の閉鎖」「力尽きる（出発前に戻る）」と、この巻物のような特殊な効果だけ
@@ -381,7 +399,7 @@ export const HUB = {
 // ------------------------------------------------------------------ 初期セーブデータ
 export const NEW_GAME = {
   race: 'barbarian',
-  stones: 0,          // 魔石（拠点で換金する）
+  stones: {},         // 魔石（等級ごとの個数 { 9: 3, 8: 1 }。拠点で換金する）
   gold: 0,
   absorbed: [],       // 吸収済みの精髄 ID
   skillSlots: [],     // セットしたスキル ID（最大 MAX_SKILL_SLOTS）

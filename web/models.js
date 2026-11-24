@@ -170,10 +170,11 @@ export function makeEssenceOrb(color) {
   return { group: g, parts: { core, shell, glow } };
 }
 
-export function makeMagicStone() {
+// color: 魔石の等級の色。等級が高いほど少し大きい（size）
+export function makeMagicStone(color = 0x55c8ff, size = 1) {
   const g = new THREE.Group();
-  const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0),
-    new THREE.MeshStandardMaterial({ color: 0x55c8ff, emissive: 0x1a6aa0, emissiveIntensity: 1.2, flatShading: true }));
+  const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.16 * size, 0),
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.45, flatShading: true }));
   m.position.y = 0.3;
   g.add(m);
   return { group: g, parts: { gem: m } };

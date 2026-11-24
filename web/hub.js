@@ -2,6 +2,7 @@
 // 迷宮から戻ったとき、またはタイトルから始めたときに開く。数値はすべて data.js の HUB / LORE などから読む。
 import * as D from './data.js';
 import * as Store from './storage.js';
+import { GRADES, stoneCount, stoneValue } from './stones.js';
 import { isGateOpen, daysUntilGateOpens, isLateEntry, formatClock } from './time.js';
 
 const $ = sel => document.querySelector(sel);
@@ -22,7 +23,7 @@ let readingLore = null;
 export function openHub(context, message = '') {
   ctx = context;
   note = message;
-  if (message) tab = ctx.getSave().stones > 0 ? 'sell' : tab;
+  if (message) tab = stoneCount(ctx.getSave().stones) > 0 ? 'sell' : tab;
   render();
 }
 
@@ -84,7 +85,7 @@ function render() {
       <div><h2 style="margin:0">${D.HUB.name}</h2><div class="muted">迷宮の入口にある宿場町</div></div>
       <div class="hub-wallet">
         <div>ゴールド <b data-test="gold">${s.gold}</b> G</div>
-        <div class="muted">魔石 ${s.stones} ／ 回復薬 ${s.potions} ／ 巻物 ${s.returnScrolls} ／ 霊薬 ${s.oblivion}</div>
+        <div class="muted">魔石 ${stoneCount(s.stones)} ／ 回復薬 ${s.potions} ／ 巻物 ${s.returnScrolls} ／ 霊薬 ${s.oblivion}</div>
       </div>
     </div>
     ${calendarHTML(s)}
@@ -106,13 +107,20 @@ function render() {
 
 function renderTab(s) {
   if (tab === 'sell') {
-    const p = D.HUB.stonePrice;
+    const G = D.STONE_GRADES;
+    const owned = GRADES.filter(g => s.stones[g] > 0);
+    const rows = owned.map(g => `
+      <div class="shop-row" data-test="stone-${g}">
+        <div><div><span style="color:${hex(G[g].color)}">◆</span> ${g}等級の魔石 × ${s.stones[g]}</div>
+          <div class="muted">1 個 ${G[g].price} G ／ 合計 ${s.stones[g] * G[g].price} G</div></div>
+        <button class="btn" data-act="sellGrade" data-arg="${g}">売る</button>
+      </div>`).join('');
     return `
-      <p class="muted">迷宮で拾った魔石を買い取ります。1 個 ${p} ゴールド。</p>
-      <div class="kv"><span>所持している魔石</span><span>${s.stones} 個（${s.stones * p} G）</span></div>
+      <p class="muted">迷宮で拾った魔石を買い取ります。等級が高いほど高値（9 等級 ${G[9].price} G 〜 1 等級 ${G[1].price} G）。</p>
+      ${rows || '<div class="muted">魔石を持っていない。</div>'}
+      <div class="kv"><span>所持している魔石</span><span>${stoneCount(s.stones)} 個（${stoneValue(s.stones)} G）</span></div>
       <div class="btns row">
-        <button class="btn primary" data-act="sellAll" ${s.stones ? '' : 'disabled'}>すべて売る</button>
-        <button class="btn" data-act="sellOne" ${s.stones ? '' : 'disabled'}>1 個売る</button>
+        <button class="btn primary" data-act="sellAll" ${stoneCount(s.stones) ? '' : 'disabled'}>すべて売る</button>
       </div>`;
   }
   if (tab === 'shop') {
@@ -202,11 +210,17 @@ function act(name, arg) {
   note = '';
   switch (name) {
     case 'sellAll':
-    case 'sellOne': {
-      const n = name === 'sellAll' ? s.stones : Math.min(1, s.stones);
-      s.stones -= n;
-      s.gold += n * H.stonePrice;
-      note = `魔石 ${n} 個を ${n * H.stonePrice} ゴールドで売った。`;
+    case 'sellGrade': {
+      // sellAll：すべて / sellGrade：指定した等級をすべて
+      const grades = name === 'sellAll' ? GRADES : [Number(arg)];
+      let n = 0, gold = 0;
+      for (const g of grades) {
+        const c = s.stones[g] || 0;
+        n += c; gold += c * D.STONE_GRADES[g].price;
+        delete s.stones[g];
+      }
+      s.gold += gold;
+      note = `魔石 ${n} 個を ${gold} ゴールドで売った。`;
       break;
     }
     case 'buyPotion':

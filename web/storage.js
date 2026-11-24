@@ -2,6 +2,7 @@
 // ゲームは必ずこのモジュール経由で保存する（アプリ化の際は、保存先を
 // Capacitor Preferences や Electron のファイル保存に差し替えられるようにするため）。
 import { NEW_GAME } from './data.js';
+import { normalizeStones } from './stones.js';
 
 const SAVE_KEY = 'essence-labyrinth/save/v1';
 const SETTINGS_KEY = 'essence-labyrinth/settings/v1';
@@ -35,7 +36,9 @@ export function loadGame() {
   if (!raw) return clone(NEW_GAME);
   try {
     // 新しい項目が増えても古いセーブを読めるよう、初期値に上書きする
-    return { ...clone(NEW_GAME), ...JSON.parse(raw) };
+    const s = { ...clone(NEW_GAME), ...JSON.parse(raw) };
+    s.stones = normalizeStones(s.stones);   // 以前の「個数だけ」の魔石は 9 等級として読む
+    return s;
   } catch {
     return clone(NEW_GAME);
   }
@@ -63,7 +66,10 @@ export function savePreRun(data) {
 }
 export function loadPreRun() {
   const d = loadJSON(PRE_RUN_KEY);
-  return d ? { ...clone(NEW_GAME), ...d } : null;
+  if (!d) return null;
+  const s = { ...clone(NEW_GAME), ...d };
+  s.stones = normalizeStones(s.stones);
+  return s;
 }
 
 // ---- 探索中の状態（階層・位置・時刻・HP・魔物など）
