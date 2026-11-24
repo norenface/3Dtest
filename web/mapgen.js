@@ -164,6 +164,7 @@ export function crystalCave(seed) {
     let reg = 'center';
     if (r < 16) reg = 'north'; else if (r > 30) reg = 'south'; else if (c < 9) reg = 'west'; else if (c > 25) reg = 'east';
     if (g[r][c] === 'K' || g[r][c] === 'M') reg = 'safe';
+    if (ring.has(r + ',' + c) || Object.values(gates).some(([gr, gc]) => gr === r && gc === c)) reg = 'dark';   // 外周の回廊
     regions[r][c] = reg;
   }
 
@@ -180,6 +181,9 @@ export function crystalCave(seed) {
   for (const [reg, [n, gap]] of Object.entries(SPAWNS)) {
     for (const [r, c] of scatter(g, rnd, n, gap, (r, c) => regions[r][c] === reg && isInner(r, c) && far(r, c))) g[r][c] = 'm';
   }
+  // 暗黒地帯にも、少ないが魔物がいる（単体。門と入口のすぐそばは避ける）
+  const nearEntrance = (r, c) => entrances.some(([er, ec]) => Math.abs(er - r) + Math.abs(ec - c) < 3);
+  for (const [r, c] of scatter(g, rnd, 4, 12, (r, c) => regions[r][c] === 'dark' && far(r, c) && !nearEntrance(r, c))) g[r][c] = 'm';
   // 外周の回廊と門の切れ込みはすべて暗黒地帯（クリスタルの光が届かない）
   const dark = makeGrid(H, W, false);
   for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) if (ring.has(r + ',' + c) && g[r][c] !== '#') dark[r][c] = true;

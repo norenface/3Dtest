@@ -374,9 +374,11 @@ function pickSpecies(region, rnd = Math.random) {
 // 群れを出す（中心のまわりの歩けるマスに散らす）
 function spawnGroup(region, r, c, count) {
   const cells = [];
+  const key0 = world.regions?.[r]?.[c] ?? null;
   for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
     const rr = r + dr, cc = c + dc;
-    if (!isWallCell(rr, cc) && !'PTM'.includes(world.grid[rr][cc]) && !isSafeCell(rr, cc)) cells.push([rr, cc]);
+    // 同じ地域のマスだけ（壁の向こうの別の地域に湧かないように）
+    if (!isWallCell(rr, cc) && !'PTM'.includes(world.grid[rr][cc]) && !isSafeCell(rr, cc) && (world.regions?.[rr]?.[cc] ?? null) === key0) cells.push([rr, cc]);
   }
   const out = [];
   const groupId = ++world.groupSeq;
@@ -1460,7 +1462,8 @@ function updateMonsters(dt) {
             const roam = world.floor.regions?.[m.regionKey]?.roam ?? 3;
             const a = Math.random() * Math.PI * 2, r = Math.random() * roam;
             m.wanderTarget = new THREE.Vector3(m.home.x + Math.cos(a) * r, 0, m.home.z + Math.sin(a) * r);
-            if (cellAt(m.wanderTarget.x, m.wanderTarget.z) === '#') m.wanderTarget.copy(m.home);
+            // 壁の中や、自分の地域の外（暗黒地帯の魔物なら迷路の中など）へは行かない
+            if (cellAt(m.wanderTarget.x, m.wanderTarget.z) === '#' || (m.regionKey && regionKeyAt(m.wanderTarget) !== m.regionKey)) m.wanderTarget.copy(m.home);
           }
           const w = new THREE.Vector3(m.wanderTarget.x - m.pos.x, 0, m.wanderTarget.z - m.pos.z);
           if (w.length() > 0.3) { moveDir = w.normalize(); speedMul = 0.3; m.facing = turnToward(m.facing, Math.atan2(-w.x, -w.z), dt * 4); }

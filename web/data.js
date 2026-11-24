@@ -288,6 +288,8 @@ export const FLOORS = [
       west: { name: '西部', monsters: [['gnome', 1]], group: [1, 1], roam: 10, link: { radius: 18, reinforce: 3, interval: 6 } },
       center: { name: '中心部', monsters: [['goblin', 1], ['wolf', 1], ['ghoul', 1], ['gnome', 1]], group: [1, 2], assist: 10 },
       safe: { name: '記念碑の空洞（安全地帯）', monsters: [], safe: true },
+      // 外周の暗黒地帯：数は少ないが、どの種類も単体でうろついている。暗くて近づくまで見えない
+      dark: { name: '暗黒地帯', monsters: [['goblin', 1], ['wolf', 1], ['ghoul', 1], ['gnome', 1]], group: [1, 1], roam: 8 },
     },
     // 特殊な条件：深淵の侵食（まれに、5 等級の深淵の個体が各地に現れる）
     abyss: { chance: 0.03, monsters: { north: 'abyss_goblin', east: 'abyss_wolf', south: 'abyss_ghoul', west: 'abyss_gnome' } },
