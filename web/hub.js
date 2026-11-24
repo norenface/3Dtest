@@ -87,7 +87,7 @@ function render() {
       <div><h2 style="margin:0">${D.HUB.name}</h2><div class="muted">迷宮の入口にある宿場町</div></div>
       <div class="hub-wallet">
         <div>ゴールド <b data-test="gold">${s.gold}</b> G</div>
-        <div class="muted">魔石 ${stoneCount(s.stones)} ／ 回復薬 ${s.potions} ／ 巻物 ${s.returnScrolls} ／ 霊薬 ${s.oblivion}</div>
+        <div class="muted">魔石 ${stoneCount(s.stones)} ／ 回復薬 ${s.potions} ／ 松明 ${s.torches} ／ 巻物 ${s.returnScrolls} ／ 霊薬 ${s.oblivion}</div>
       </div>
     </div>
     ${calendarHTML(s)}
@@ -137,6 +137,8 @@ function renderTab(s) {
     return `
       ${row(`${H.potion.name}（所持 ${s.potions}/${H.potion.max}）`, H.potion.description, H.potion.price, 'buyPotion',
         s.gold >= H.potion.price && s.potions < H.potion.max)}
+      ${row(`${H.torch.name}（所持 ${s.torches}/${H.torch.max}）`, H.torch.description, H.torch.price, 'buyTorch',
+        s.gold >= H.torch.price && s.torches < H.torch.max)}
       ${nextW
         ? row(`武器：${w[s.weaponLevel].name} → ${nextW.name}`, `攻撃力 +${nextW.attackBonus}（現在 +${w[s.weaponLevel].attackBonus}）`, nextW.price, 'buyWeapon', s.gold >= nextW.price, '強化')
         : row(`武器：${w[s.weaponLevel].name}`, 'これ以上は強化できない。', null, 'none', false, '最大')}
@@ -227,6 +229,9 @@ function act(name, arg) {
     }
     case 'buyPotion':
       if (s.gold >= H.potion.price && s.potions < H.potion.max) { s.gold -= H.potion.price; s.potions++; note = `${H.potion.name}を買った。`; }
+      break;
+    case 'buyTorch':
+      if (s.gold >= H.torch.price && s.torches < H.torch.max) { s.gold -= H.torch.price; s.torches++; note = `${H.torch.name}を買った。`; }
       break;
     case 'buyReturnScroll':
       if (H.returnScroll.inShop && s.gold >= H.returnScroll.price && s.returnScrolls < H.returnScroll.max) { s.gold -= H.returnScroll.price; s.returnScrolls++; note = `${H.returnScroll.name}を買った。`; }

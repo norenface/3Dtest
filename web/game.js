@@ -684,7 +684,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   // プレイヤーの松明（影を落とす唯一の光源）
   // 水晶の洞窟では手元を照らす程度（暗黒地帯では先が見えない）
   world.torchBase = crystalMode ? 4 : night ? 13 : 14;
-  const torch = new THREE.PointLight(0xffc27a, world.torchBase, crystalMode ? 8 : night ? 18 : 18, 1.5);
+  world.torchRange = crystalMode ? 8 : 18;
+  const torch = new THREE.PointLight(0xffc27a, world.torchBase, world.torchRange, 1.5);
   torch.castShadow = settings.quality === 'high';
   torch.shadow.mapSize.set(512, 512);
   torch.shadow.bias = -0.002;
@@ -1396,7 +1397,11 @@ function updatePlayer(dt) {
   // 松明は左手に持っている想定（目の少し左下）
   const lx = Math.cos(camState.yaw), lz = -Math.sin(camState.yaw);
   world.torch.position.set(player.pos.x - lx * 0.4, 1.9, player.pos.z - lz * 0.4);
-  world.torch.intensity = world.torchBase + Math.sin(world.clock * 13) * 1.0 + Math.sin(world.clock * 7.3) * 0.8;
+  // 暗黒地帯では、松明（アイテム）を灯しているときだけ手元が明るい
+  const H = D.HUB.torch;
+  const base = world.inDark ? (torchLit() ? H.light : 0) : world.torchBase;
+  world.torch.distance = world.inDark && torchLit() ? H.lightRange : world.torchRange;
+  world.torch.intensity = base ? base + Math.sin(world.clock * 13) * 1.0 + Math.sin(world.clock * 7.3) * 0.8 : 0;
   vmLight.intensity = 3 + Math.sin(world.clock * 13) * 0.3;
 }
 
@@ -1949,19 +1954,40 @@ function camp() {
   else autosave();
 }
 
+// 松明（アイテム）。暗黒地帯で灯っているかを返す
+function updateTorchItem(dt, dark) {
+  const run = world.run;
+  if (!run || world.state !== 'playing' || !dark) return false;
+  const H = D.HUB.torch;
+  run.torchLeft ??= 0;
+  if (run.torchLeft <= 0 && save.torches > 0) {
+    save.torches--;
+    run.torchLeft = H.burnHours;
+    log(`${H.name}に火をつけた（残り ${save.torches} 本）。自分の近くだけ見える。`);
+  }
+  if (run.torchLeft <= 0) return false;
+  run.torchLeft -= dt / D.TIME.secondsPerDay * 24;
+  if (run.torchLeft <= 0) { run.torchLeft = 0; log(save.torches > 0 ? `${H.name}が燃え尽きた。` : `${H.name}が燃え尽きた。もう松明がない……。`); }
+  return run.torchLeft > 0;
+}
+function torchLit() { return !!(world.inDark && (world.run?.torchLeft ?? 0) > 0); }
+
 function updateCamera(dt) {
   // 水晶の迷宮：いる場所の明るさで見通しが変わる（暗黒地帯では数 m 先しか見えない）
   if (world.vis && scene.fog) {
     const L = world.floor.lighting;
     const v = visibilityAt(player.pos);
-    const far = L.darkFog + (L.litFog - L.darkFog) * Math.min(1, v * 1.8);
-    scene.fog.far += (far - scene.fog.far) * Math.min(1, dt * 2.5);
-    scene.fog.near = scene.fog.far * 0.2;
     const dark = v < 0.05;
     if (world.state === 'playing' && dark !== world.inDark) {
       world.inDark = dark;
-      if (dark) log('暗黒地帯に入った。先が見通せない。');
+      if (dark) log(save.torches > 0 || (world.run?.torchLeft ?? 0) > 0 ? '暗黒地帯に入った。' : '暗黒地帯に入った。松明がなく、ほとんど何も見えない……。');
     }
+    // 松明：暗黒地帯にいる間だけ灯り、燃え尽きたら次の 1 本に火をつける
+    const lit = updateTorchItem(dt, dark);
+    const darkFog = lit ? D.HUB.torch.sight : L.darkFog;
+    const far = darkFog + (L.litFog - darkFog) * Math.min(1, v * 1.8);
+    scene.fog.far += (far - scene.fog.far) * Math.min(1, dt * 2.5);
+    scene.fog.near = scene.fog.far * 0.2;
   }
   updateCrystalLights(dt);
   // 飾りの動き（漂う光・霧）と尖塔の光
@@ -2036,7 +2062,8 @@ function updateHUD() {
   const eye = runFlags(world.floor.id).witchEye ?? 0;
   const eyeHTML = world.floor.id === D.FLOOR.F3 && eye > 0 ? ` ／ <span class="eye ${eye >= D.WITCH_EYE.max ? 'max' : ''}">魔女の目 ${eye}/${D.WITCH_EYE.max}</span>` : '';
   const fi = $('#field-info');
-  const html = (world.inDark ? '<span class="eye">暗黒地帯</span>' : (reg?.name ?? '')) + eyeHTML;
+  const torchInfo = world.inDark ? (torchLit() ? ` ／ 松明 残り ${Math.ceil(world.run.torchLeft)} 時間（予備 ${save.torches} 本）` : ' ／ 松明なし') : '';
+  const html = (world.inDark ? '<span class="eye">暗黒地帯</span>' + torchInfo : (reg?.name ?? '')) + eyeHTML;
   if (fi.innerHTML !== html) fi.innerHTML = html;
   const nStones = stoneCount(world.run.stones);
   $('#stones').textContent = nStones ? `${nStones}（最高 ${bestGrade(world.run.stones)}等級）` : '0';
@@ -2542,6 +2569,7 @@ window.game = {
   setElapsed(h) { world.time.hours = world.time.startHours + h; },   // 突入からの経過時間を設定する
   closeHours() { return closeHoursOf(world.floor); },
   fogFar() { return scene.fog?.far; },
+  torchLight() { return { intensity: world.torch.intensity, range: world.torch.distance }; },
   get landing() { return { dark: world.landedInDark, vis: visibilityAt(player.pos), glow: world.glow?.[Math.round(player.pos.z / T)]?.[Math.round(player.pos.x / T)] }; },
   portals() { return world.portals; },
   rebuild(id, arrive = 'start') { buildFloor(floorConfig(id), arrive); },

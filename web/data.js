@@ -294,7 +294,7 @@ export const FLOORS = [
     // 特殊な条件：深淵の侵食（まれに、5 等級の深淵の個体が各地に現れる）
     abyss: { chance: 0.03, monsters: { north: 'abyss_goblin', east: 'abyss_wolf', south: 'abyss_ghoul', west: 'abyss_gnome' } },
     lighting: { mode: 'crystal', ambient: 0x4a6aa8, ambientIntensity: 0.55, fog: 0x01030a, torchColor: 0xffa860,
-      crystalColor: 0x7fd4ff, darkFog: 6, litFog: 44 },
+      crystalColor: 0x7fd4ff, darkFog: 2.2, litFog: 44 },   // darkFog：松明なしの暗黒地帯での見通し（m）
   },
   // ---- 第2層：第1層で通った門の方角ごとに 4 つの独立したエリア（エリア間は行き来できない）
   {
@@ -501,6 +501,9 @@ export const HUB = {
   name: '冒険者の宿場',
   // 魔石の買取価格は STONE_GRADES（等級ごと）
   potion: { name: '回復薬', description: '最大 HP の 50% を回復する。迷宮で R キー／回復ボタン。', price: 30, heal: 0.5, max: 3, cooldown: 1.0 },
+  // 松明：暗黒地帯に入ると自動で灯り、自分の近く（sight m）だけ見えるようになる。暗黒地帯の中にいる間だけ燃え、1 本で burnHours 時間（ゲーム内）もつ。
+  // 持っていないと、暗黒地帯ではほとんど何も見えない（lighting.darkFog）
+  torch: { name: '松明', description: '暗黒地帯に入ると自動で灯り、自分の近くだけ見えるようになる。1 本で暗黒地帯の中を 12 時間（ゲーム内）照らす。', price: 40, max: 5, burnHours: 12, sight: 9, light: 16, lightRange: 11 },
   oblivion: { name: '忘却の霊薬', description: '吸収した精髄を 1 つ魂から取り除く。とても貴重。', price: 400 },
   // 迷宮から地上へ戻る手段は「階層の閉鎖」「力尽きる（出発前に戻る）」と、この巻物のような特殊な効果だけ
   returnScroll: { name: '帰還の巻物', description: '迷宮の中で読むと、その場から地上へ帰還できる（魔石は持ち帰れる）。近くに魔物がいると読めない。', price: 250, max: 1,
@@ -528,6 +531,7 @@ export const NEW_GAME = {
   potions: 1,
   oblivion: 0,        // 忘却の霊薬の所持数
   returnScrolls: 0,   // 帰還の巻物の所持数
+  torches: 0,         // 松明の所持数
   weaponLevel: 0,
   armorLevel: 0,
   lore: [],           // 読めるようになった古文書 ID
