@@ -463,8 +463,12 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   if (crystalMode) {
     crystals = floorCells.filter(([r, c]) => world.grid[r][c] === 'C');
     world.glow = crystalField(crystals, CRYSTAL_REACH);
-    glowMap = makeGlowMap(world.glow);
     world.vis = crystalField(crystals, CRYSTAL_VIEW);
+    // 暗黒地帯（外周）には光が届かない
+    if (layout.dark) for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
+      if (layout.dark[r][c]) { world.glow[r][c] = 0; world.vis[r][c] = 0; }
+    }
+    glowMap = makeGlowMap(world.glow);
   }
   const tmp = new THREE.Object3D();
   const col = new THREE.Color();
@@ -1938,7 +1942,7 @@ function updateHUD() {
   const eye = runFlags(world.floor.id).witchEye ?? 0;
   const eyeHTML = world.floor.id === D.FLOOR.F3 && eye > 0 ? ` ／ <span class="eye ${eye >= D.WITCH_EYE.max ? 'max' : ''}">魔女の目 ${eye}/${D.WITCH_EYE.max}</span>` : '';
   const fi = $('#field-info');
-  const html = (reg?.name ?? '') + eyeHTML;
+  const html = (world.inDark ? '<span class="eye">暗黒地帯</span>' : (reg?.name ?? '')) + eyeHTML;
   if (fi.innerHTML !== html) fi.innerHTML = html;
   const nStones = stoneCount(world.run.stones);
   $('#stones').textContent = nStones ? `${nStones}（最高 ${bestGrade(world.run.stones)}等級）` : '0';
@@ -2442,6 +2446,7 @@ window.game = {
   setCityHour(h) { save.hour = h; },
   setElapsed(h) { world.time.hours = world.time.startHours + h; },   // 突入からの経過時間を設定する
   closeHours() { return closeHoursOf(world.floor); },
+  fogFar() { return scene.fog?.far; },
   get landing() { return { dark: world.landedInDark, vis: visibilityAt(player.pos), glow: world.glow?.[Math.round(player.pos.z / T)]?.[Math.round(player.pos.x / T)] }; },
   portals() { return world.portals; },
   rebuild(id, arrive = 'start') { buildFloor(floorConfig(id), arrive); },

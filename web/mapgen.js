@@ -110,7 +110,7 @@ function scatter(g, rnd, count, minGap, ok) {
 }
 
 // ====================================================================== 第1層：水晶の洞窟
-// 十字形の洞窟。外周の 1 マス幅の回廊は暗黒地帯（クリスタルがない）。内側は急カーブの多い迷路。
+// 十字形の洞窟。外周の 1 マス幅の回廊はすべて暗黒地帯（dark。クリスタルの光が届かない）。内側は急カーブの多い迷路。
 // 中央の空洞と記念碑の周りは安全地帯（魔物が入ってこない）。東西南北の腕の先に第2層への門（1 北 / 2 東 / 3 南 / 4 西）
 export function crystalCave(seed) {
   const rnd = seededRandom(seed);
@@ -164,7 +164,11 @@ export function crystalCave(seed) {
   for (const reg of ['north', 'east', 'south', 'west', 'center']) {
     for (const [r, c] of scatter(g, rnd, 2, 5, (r, c) => regions[r][c] === reg && isInner(r, c) && far(r, c))) g[r][c] = 'm';
   }
-  return { map: toRows(g), regions, arrivals: {}, prevCells: {} };
+  // 外周の回廊と門の切れ込みはすべて暗黒地帯（クリスタルの光が届かない）
+  const dark = makeGrid(H, W, false);
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) if (ring.has(r + ',' + c) && g[r][c] !== '#') dark[r][c] = true;
+  for (const [r, c] of Object.values(gates)) dark[r][c] = true;
+  return { map: toRows(g), regions, dark, arrivals: {}, prevCells: {} };
 }
 
 // ====================================================================== 第2層の 4 つのエリア
