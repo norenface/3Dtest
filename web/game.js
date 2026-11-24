@@ -10,6 +10,8 @@ import { normalizeStones, addStone, mergeStones, stoneCount, stoneValue, bestGra
 import { openHub, hubClockChanged } from './hub.js';
 import { makeViewmodel, makeMonster, makeEssenceOrb, makeMagicStone, makePortal, flatMat } from './models.js';
 import { GENERATORS } from './mapgen.js';
+import { texture, texturedMat, repeatSideUV, roughBox, setBumpEnabled, registerBump } from './textures.js';
+import { decorate, buildSkyDome, buildSpire } from './decor.js';
 import { TimeManager, floorConfig, closeHoursOf, closeLabel, checkFloorClosure, formatRemaining, isGateOpen, isLateEntry, formatClock } from './time.js';
 
 const $ = sel => document.querySelector(sel);
@@ -48,6 +50,7 @@ function applyQuality() {
   renderer.setPixelRatio(high ? Math.min(devicePixelRatio, 2) : 1);
   renderer.shadowMap.enabled = high;
   if (world.torch) world.torch.castShadow = high;
+  setBumpEnabled(high);   // 質感の凹凸は「高」だけ
   scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   resize();
 }
@@ -136,8 +139,9 @@ const CRYSTAL_REACH = 3;     // クリスタルの光が届くマス数（壁の
 const CRYSTAL_VIEW = 5;      // 見通しの計算で使うマス数（これより離れた所は暗黒地帯）
 // 明るさはマスごとの値を入れたテクスチャ（glowMap）から読む（水晶の迷宮では、歩ける床が明るい青・壁は暗い紺）。壁の面は「面が向いている側の床のマス」の明るさになるので、
 // 暗黒地帯に面した壁は暗く、明るい通路に面した壁は明るい。床・天井は隣のマスとなめらかにつながる
-function glowMat(color, emissive, intensity, glowMap) {
+function glowMat(color, emissive, intensity, glowMap, texKind = null) {
   const m = new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: intensity, flatShading: true, roughness: 0.9, metalness: 0 });
+  if (texKind) { const t = texture(texKind); m.map = t.map; m.bumpMap = t.bump; m.bumpScale = 1.2; registerBump(m); }
   const grid = new THREE.Vector2(world.cols, world.rows);
   m.onBeforeCompile = sh => {
     sh.uniforms.uGlowMap = { value: glowMap };
@@ -325,13 +329,14 @@ function floorLayout(floorDef) {
 
 // 見た目のテーマ（床・壁の色、壁の高さ、柱などの小物）
 const THEMES = {
-  stone: { floor: 0x57534c, wall: 0x4a4740, cap: 0x77705f, prop: 'pillar' },
-  crystal: { floor: 0x2a4f8c, wall: 0x0e1528, cap: 0x0c1426, prop: 'pillar' },
-  canyon: { floor: 0x5a4636, wall: 0x7a5440, cap: 0x8a6448, prop: 'boulder', wallH: 9 },
-  dead: { floor: 0x24211e, wall: 0x4a4844, cap: 0x5a5854, prop: 'ruin', wallH: 3 },
-  desert: { floor: 0xb89660, wall: 0x9a7650, cap: 0xa88458, prop: 'ruin', wallH: 4.5 },
-  forest: { floor: 0x2c4628, wall: 0x4a5a3a, cap: 0x56663f, prop: 'tree', wallH: 4 },
-  pilgrim: { floor: 0x46562e, wall: 0x6a6a60, cap: 0x7a7a6e, prop: 'tree', wallH: 4 },
+  // tex: 床・壁・天井の模様（textures.js） / rough: 壁のでこぼこの大きさ（m）/ texBoost: 模様で暗くなるぶんの色の補正
+  stone: { floor: 0x57534c, wall: 0x4a4740, cap: 0x77705f, prop: 'pillar', tex: { floor: 'flagstone', wall: 'bricks', ceil: 'rock' } },
+  crystal: { floor: 0x2a4f8c, wall: 0x0e1528, cap: 0x0c1426, prop: 'pillar', rough: 0.35, tex: { floor: 'rock', wall: 'crystalRock', ceil: 'crystalRock' } },
+  canyon: { floor: 0x5a4636, wall: 0x7a5440, cap: 0x8a6448, prop: 'boulder', wallH: 9, rough: 0.6, tex: { floor: 'dirt', wall: 'strata' } },
+  dead: { floor: 0x3e3832, wall: 0x5a5854, cap: 0x6a6864, prop: 'ruin', wallH: 3, tex: { floor: 'mud', wall: 'bricks' }, floorRough: 0.6 },
+  desert: { floor: 0xb89660, wall: 0x9a7650, cap: 0xa88458, prop: 'ruin', wallH: 4.5, rough: 0.45, tex: { floor: 'sand', wall: 'rock' } },
+  forest: { floor: 0x2c4628, wall: 0x4a5a3a, cap: 0x56663f, prop: 'tree', wallH: 4, rough: 0.4, tex: { floor: 'grass', wall: 'rock' } },
+  pilgrim: { floor: 0x46562e, wall: 0x6a6a60, cap: 0x7a7a6e, prop: 'tree', wallH: 4, rough: 0.4, texBoost: 1.5, tex: { floor: 'grass', wall: 'rock' } },
 };
 // 第3層はフィールドごとに床の色を変えて、どこにいるかわかるようにする
 const FIELD_FLOOR = { witch: 0x1e3420, hill: 0x67675c, orc: 0x5a4a30, swamp: 0x26382e, statue: 0x6a665a, road_w: 0x6a5e44,
@@ -480,44 +485,40 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   const tmp = new THREE.Object3D();
   const col = new THREE.Color();
   // 床（インスタンス描画）
-  const floorMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.2, T), crystalMode ? glowMat(0x2a4f8c, 0x4a96ee, 0.85, glowMap) : flatMat(0xffffff, { roughness: 0.95 }), floorCells.length);
+  // 質感：テーマごとの床・壁・天井の模様（textures.js）。色はインスタンスの色で付ける
+  const tx = theme.tex;
+  const floorGeo = new THREE.BoxGeometry(T, 0.2, T);
+  const floorMat = crystalMode ? glowMat(0x2a4f8c, 0x4a96ee, 0.85, glowMap, tx.floor) : texturedMat(tx.floor, { roughness: theme.floorRough ?? 0.95 });
+  const floorMesh = new THREE.InstancedMesh(floorGeo, floorMat, floorCells.length);
   floorCells.forEach(([r, c], i) => {
-    tmp.position.set(c * T, -0.1, r * T); tmp.rotation.set(0, 0, 0); tmp.scale.set(1, 1, 1); tmp.updateMatrix();
+    // 模様の繰り返しが目立たないよう、マスごとに 90° 単位で回す
+    tmp.position.set(c * T, -0.1, r * T); tmp.rotation.set(0, Math.floor(rnd() * 4) * Math.PI / 2, 0); tmp.scale.set(1, 1, 1); tmp.updateMatrix();
     floorMesh.setMatrixAt(i, tmp.matrix);
     if (crystalMode) { const v = 0.9 + rnd() * 0.2; floorMesh.setColorAt(i, col.setRGB(v, v, v)); return; }
     const base = FIELD_FLOOR[world.regions?.[r]?.[c]] ?? theme.floor;
-    col.set(base).multiplyScalar(0.85 + rnd() * 0.3);
+    col.set(base).multiplyScalar((0.9 + rnd() * 0.25) * (theme.texBoost ?? 1.25));
     floorMesh.setColorAt(i, col);
   });
+  tmp.rotation.set(0, 0, 0);
   floorMesh.receiveShadow = true;
   root.add(floorMesh);
 
-  // 床の継ぎ目（石畳っぽく見せる細い溝。屋内の階層だけ）
-  if (!night) {
-    const seamMat = flatMat(crystalMode ? 0x1d3d70 : 0x1c1b1a);
-    const seamGeoX = new THREE.BoxGeometry(T, 0.02, 0.06), seamGeoZ = new THREE.BoxGeometry(0.06, 0.02, T);
-    const seams = new THREE.InstancedMesh(seamGeoX, seamMat, floorCells.length * 2);
-    const seamsZ = new THREE.InstancedMesh(seamGeoZ, seamMat, floorCells.length * 2);
-    floorCells.forEach(([r, c], i) => {
-      for (let k = 0; k < 2; k++) {
-        tmp.position.set(c * T, 0.005, r * T - T / 2 + (k + 0.5) * T / 2); tmp.updateMatrix(); seams.setMatrixAt(i * 2 + k, tmp.matrix);
-        tmp.position.set(c * T - T / 2 + (k + 0.5) * T / 2, 0.005, r * T); tmp.updateMatrix(); seamsZ.setMatrixAt(i * 2 + k, tmp.matrix);
-      }
-    });
-    root.add(seams, seamsZ);
-  }
-
-  // 壁（インスタンス描画。少しずつ色と高さを変える）
-  const wallMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(T, wallH, T), crystalMode ? glowMat(0x0e1528, 0x1c3460, 0.45, glowMap) : flatMat(0xffffff, { roughness: 0.9 }), wallCells.length);
+  // 壁（インスタンス描画）。洞窟や崖は面をでこぼこにする。高い壁でも模様が伸びないよう縦に繰り返す
+  const wallGeo = theme.rough ? roughBox(T, wallH, T, theme.rough, floorDef.id) : new THREE.BoxGeometry(T, wallH, T);
+  repeatSideUV(wallGeo, 1, Math.max(1, wallH / T));
+  const wallMat = crystalMode ? glowMat(0x0e1528, 0x1c3460, 0.45, glowMap, tx.wall) : texturedMat(tx.wall, { roughness: 0.92, flat: !!theme.rough });
+  const wallMesh = new THREE.InstancedMesh(wallGeo, wallMat, wallCells.length);
   wallCells.forEach(([r, c], i) => {
     const hy = 1 + (rnd() - 0.5) * (night ? 0.5 : 0.08);
-    tmp.position.set(c * T, wallH * hy / 2, r * T); tmp.scale.set(1, hy, 1); tmp.updateMatrix();
+    tmp.position.set(c * T, wallH * hy / 2, r * T); tmp.scale.set(1, hy, 1);
+    tmp.rotation.set(0, theme.rough ? Math.floor(rnd() * 4) * Math.PI / 2 : 0, 0);
+    tmp.updateMatrix();
     wallMesh.setMatrixAt(i, tmp.matrix);
     if (crystalMode) { const v = 0.85 + rnd() * 0.3; wallMesh.setColorAt(i, col.setRGB(v, v * 0.96, v * 0.9)); return; }
-    col.set(theme.wall).multiplyScalar(0.8 + rnd() * 0.4);
+    col.set(theme.wall).multiplyScalar((0.8 + rnd() * 0.4) * (theme.texBoost ?? 1.25));
     wallMesh.setColorAt(i, col);
   });
-  tmp.scale.set(1, 1, 1);
+  tmp.scale.set(1, 1, 1); tmp.rotation.set(0, 0, 0);
   wallMesh.castShadow = true;
   wallMesh.receiveShadow = true;
   root.add(wallMesh);
@@ -525,25 +526,31 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
 
   if (!night) {
     // 天井（一人称視点では見上げると見える）
-    const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), crystalMode ? glowMat(0x13213e, 0x2a5aa0, 0.45, glowMap) : flatMat(0xffffff, { roughness: 1 }), floorCells.length);
+    const ceilMat = crystalMode ? glowMat(0x13213e, 0x2a5aa0, 0.45, glowMap, tx.ceil ?? tx.wall) : texturedMat(tx.ceil ?? 'rock', { roughness: 1 });
+    const ceil = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.3, T), ceilMat, floorCells.length);
     floorCells.forEach(([r, c], i) => {
-      tmp.position.set(c * T, wallH + 0.15, r * T); tmp.updateMatrix();
+      tmp.position.set(c * T, wallH + 0.15, r * T); tmp.rotation.set(0, Math.floor(rnd() * 4) * Math.PI / 2, 0); tmp.updateMatrix();
       ceil.setMatrixAt(i, tmp.matrix);
-      const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.16 + rnd() * 0.04;
+      const v = crystalMode ? 0.9 + rnd() * 0.2 : 0.2 + rnd() * 0.05;
       ceil.setColorAt(i, col.setRGB(v, v * 0.97, v * 0.93));
     });
+    tmp.rotation.set(0, 0, 0);
     ceil.receiveShadow = true;
     root.add(ceil);
     if (!crystalMode) {
       // 天井の梁（4m ごと）
-      const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.35, 0.35), flatMat(0x3a2c20), floorCells.length);
+      const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(T, 0.35, 0.35), texturedMat('bark'), floorCells.length);
       floorCells.forEach(([r, c], i) => {
         tmp.position.set(c * T, wallH - 0.15, r * T - T / 2); tmp.updateMatrix(); beams.setMatrixAt(i, tmp.matrix);
+        beams.setColorAt(i, col.set(0x5a4430));
       });
       root.add(beams);
     }
-  } else if (L.stars) {
-    buildStarSky(root, rnd);
+  } else {
+    // 夜空：地平線から天頂へのグラデーションと星
+    const cx = world.cols * T / 2, cz = world.rows * T / 2;
+    buildSkyDome(root, L.fog, L.zenith ?? 0x0a1030, { x: cx, z: cz }, Math.max(world.cols, world.rows) * T * 0.9 + 60);
+    if (L.stars) buildStarSky(root, rnd);
   }
 
   // 壁の上端の縁取り（輪郭をわかりやすくする）
@@ -555,6 +562,13 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
 
   // 柱・木・岩・残骸（P）。数が多いのでインスタンス描画にする
   buildProps(root, propCells, theme, rnd, wallH);
+  // 飾り（鍾乳石・草むら・霧・水たまり・漂う光など。テーマごと）
+  world.decorAnims = [];
+  decorate(root, { theme: floorDef.theme, floorCells, wallCells, grid: world.grid, regions: world.regions, dark: layout.dark, glow: world.glow,
+    rnd, wallH, cellCenter, isWallCell, T, anims: world.decorAnims });
+  // 第3層の中心の尖塔
+  world.spire = null;
+  if (floorDef.theme === 'pilgrim') world.spire = buildSpire(root, cellCenter(Math.floor(world.rows / 2), Math.floor(world.cols / 2)));
   // 瓦礫（石の回廊だけ）
   if (floorDef.theme === undefined) {
     for (const [r, c] of floorCells) {
@@ -669,8 +683,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
 
   // プレイヤーの松明（影を落とす唯一の光源）
   // 水晶の洞窟では手元を照らす程度（暗黒地帯では先が見えない）
-  world.torchBase = crystalMode ? 4 : night ? 9 : 14;
-  const torch = new THREE.PointLight(0xffc27a, world.torchBase, crystalMode ? 8 : night ? 14 : 18, 1.5);
+  world.torchBase = crystalMode ? 4 : night ? 13 : 14;
+  const torch = new THREE.PointLight(0xffc27a, world.torchBase, crystalMode ? 8 : night ? 18 : 18, 1.5);
   torch.castShadow = settings.quality === 'high';
   torch.shadow.mapSize.set(512, 512);
   torch.shadow.bias = -0.002;
@@ -763,14 +777,14 @@ function buildProps(root, cells, theme, rnd, wallH) {
     root.add(m);
   };
   // 柱
-  inst(new THREE.CylinderGeometry(0.55, 0.65, wallH, 8), flatMat(0x5a5650), groups.pillar, ([r, c], o) => {
+  inst(new THREE.CylinderGeometry(0.55, 0.65, wallH, 8), texturedMat('bricks'), groups.pillar.map(cell => Object.assign(cell, { color: new THREE.Color(0x8a867e) })), ([r, c], o) => {
     const p = cellCenter(r, c); o.position.set(p.x, wallH / 2, p.z); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); addPillar(p.x, p.z, 0.75); });
   // 岩
-  inst(new THREE.DodecahedronGeometry(1.2, 0), flatMat(0xffffff), groups.boulder.map(cell => Object.assign(cell, { color: new THREE.Color(theme.wall).multiplyScalar(0.8 + rnd() * 0.4) })), ([r, c], o) => {
+  inst(new THREE.DodecahedronGeometry(1.2, 1), texturedMat('rock', { flat: true }), groups.boulder.map(cell => Object.assign(cell, { color: new THREE.Color(theme.wall).multiplyScalar(1.0 + rnd() * 0.5) })), ([r, c], o) => {
     const p = cellCenter(r, c); const s = 0.8 + rnd() * 0.6;
     o.position.set(p.x + (rnd() - 0.5), s * 0.7, p.z + (rnd() - 0.5)); o.rotation.set(rnd() * 3, rnd() * 3, 0); o.scale.set(s, s * 0.9, s); addPillar(o.position.x, o.position.z, 1.1 * s); });
   // 残骸（折れた柱）
-  inst(new THREE.BoxGeometry(1.1, 1, 1.1), flatMat(0xffffff), groups.ruin.map(cell => Object.assign(cell, { color: new THREE.Color(theme.cap).multiplyScalar(0.8 + rnd() * 0.35) })), ([r, c], o) => {
+  inst(new THREE.BoxGeometry(1.1, 1, 1.1), texturedMat('bricks'), groups.ruin.map(cell => Object.assign(cell, { color: new THREE.Color(theme.cap).multiplyScalar(1.0 + rnd() * 0.4) })), ([r, c], o) => {
     const p = cellCenter(r, c); const h = 1 + rnd() * 2.5;
     o.position.set(p.x, h / 2, p.z); o.rotation.set((rnd() - 0.5) * 0.25, rnd() * 3, (rnd() - 0.5) * 0.25); o.scale.set(1, h, 1); addPillar(p.x, p.z, 0.8); });
   // 木：幹と葉
@@ -781,7 +795,7 @@ function buildProps(root, cells, theme, rnd, wallH) {
       color: new THREE.Color(witch ? 0x1a3a26 : floorDefLeaf()).multiplyScalar(0.75 + rnd() * 0.5) };
   });
   function floorDefLeaf() { return world.floor.theme === 'forest' ? 0x2f5a2a : 0x3f6a32; }
-  inst(new THREE.CylinderGeometry(0.25, 0.4, 1, 6), flatMat(0x4a3424), trees.map(t => ({ ...t, color: null })), (t, o) => {
+  inst(new THREE.CylinderGeometry(0.25, 0.4, 1, 6), texturedMat('bark'), trees.map(t => ({ ...t, color: new THREE.Color(0x6a4a34) })), (t, o) => {
     o.position.set(t.x, t.h / 2, t.z); o.rotation.set(0, 0, 0); o.scale.set(t.s, t.h, t.s); addPillar(t.x, t.z, 0.45 * t.s + 0.1); });
   inst(new THREE.ConeGeometry(1.6, 3.2, 7), flatMat(0xffffff), trees, (t, o) => {
     o.position.set(t.x, t.h + 0.6, t.z); o.rotation.set(0, rnd() * 3, 0); o.scale.set(t.s, t.s, t.s); });
@@ -1950,6 +1964,9 @@ function updateCamera(dt) {
     }
   }
   updateCrystalLights(dt);
+  // 飾りの動き（漂う光・霧）と尖塔の光
+  for (const f of world.decorAnims ?? []) f(dt, world.clock);
+  if (world.spire) world.spire.beacon.rotation.y += dt * 0.8;
   // 力尽きたら視点が床に崩れ落ちる
   const targetEye = player.dead ? 0.35 : camState.eye;
   camState.eyeNow = camState.eyeNow ?? targetEye;

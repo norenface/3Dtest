@@ -321,7 +321,7 @@ export const FLOORS = [
         ['death_fiend', 1], ['chimera_wolf', 1], ['ghoul_lord', 0.7], ['dullahan', 0.06, 'rare'], ['death_knight', 0.02, 'rare']] },
     },
     banshee: true,   // ときどきバンシーの泣き声が響く
-    lighting: { mode: 'night', ambient: 0x7a8aa8, ambientIntensity: 1.6, fog: 0x0a0c12, sight: 15, stars: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0x8a9ab8, ambientIntensity: 2.4, fog: 0x0c0e16, sight: 16, stars: true, torchColor: 0xffa860 },
   },
   {
     id: 23, depth: 2, area: '西',

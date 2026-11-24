@@ -352,9 +352,9 @@ export function pilgrimRoad(seed) {
     if (g[rr][cc] !== '#' || Math.abs(rr - C) + Math.abs(cc - C) > 3) g[rr][cc] = '.';
   }
   // 中心の尖塔の広場と第4層への門
-  for (let r = C - 2; r <= C + 2; r++) for (let c = C - 2; c <= C + 2; c++) g[r][c] = '.';
-  for (const [r, c] of [[C - 1, C - 1], [C - 1, C + 1], [C + 1, C - 1], [C + 1, C + 1]]) g[r][c] = '#';   // 尖塔の土台
-  g[C][C] = 'N';
+  for (let r = C - 3; r <= C + 3; r++) for (let c = C - 3; c <= C + 3; c++) g[r][c] = '.';
+  for (let r = C - 1; r <= C + 1; r++) for (let c = C - 1; c <= C + 1; c++) g[r][c] = '#';   // 尖塔の土台（中心の 3×3）
+  g[C + 2][C] = 'N';   // 尖塔の南側の入口が第4層への門
   // 到着地点と、来たエリアへ戻る門
   const arrivals = { 21: [C, N - 4], 22: [N - 4, C], 23: [C, 3], 24: [3, C] };
   const prevCells = { 21: [C + 2, N - 3], 22: [N - 3, C + 2], 23: [C + 2, 2], 24: [2, C + 2] };
