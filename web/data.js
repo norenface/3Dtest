@@ -118,7 +118,7 @@ function mon(id, name, grade, model, look, o = {}) {
     hp: Math.round(hp * (o.hp ?? 1)), attack: Math.round(atk * (o.atk ?? 1)), defense: o.defense ?? 0,
     speed: o.speed ?? 3.0, aggroRange: o.aggro ?? 11, attackRange: o.range ?? 1.6, windup: o.windup ?? 0.45,
     attackCooldown: o.cd ?? 1.2, radius: o.radius ?? 0.45, knockbackResist: o.kb ?? 0,
-    ranged: o.ranged ?? null, lunge: !!o.lunge, physImmune: !!o.physImmune,
+    ranged: o.ranged ?? null, lunge: !!o.lunge, physImmune: !!o.physImmune, human: !!o.human,
     drops: o.essence ? [{ essence: o.essence, chance: o.chance }] : [],
   };
 }
@@ -203,6 +203,16 @@ export const MONSTERS = {
   orc_great: mon('orc_great', 'オーク大戦士', 7, 'humanoid', { ...ORC, armor: 0x5a4a3a, weapon: 'sword', size: 1.6 }, { speed: 3.0, range: 2.2, radius: 0.7, kb: 0.6, defense: 3 }),
   orc_hero: mon('orc_hero', 'オークヒーロー', 5, 'humanoid', { ...ORC, armor: 0x8a6a2a, weapon: 'sword', shield: 0x8a6a2a, size: 1.8, eye: 0xffd24a }, { speed: 3.4, range: 2.4, radius: 0.8, kb: 0.9, defense: 5 }),
   orc_lord: mon('orc_lord', 'オークロード', 2, 'humanoid', { ...ORC, skin: 0x4a5a2a, armor: 0x3a2a2a, weapon: 'sword', size: 2.2, build: 1.3, eye: 0xff2a2a }, { speed: 3.6, aggro: 18, range: 2.8, radius: 1.0, kb: 1, defense: 8 }),
+
+  // ---- 略奪者（迷宮に入った冒険者を襲う人間。精髄も魔石も落とさない。RAIDERS を参照）
+  raider_sword: mon('raider_sword', '略奪者（剣士）', 7, 'humanoid', { skin: 0xd8b090, cloth: 0x4a3a2a, armor: 0x5a4a38, head: 'hood', weapon: 'sword', eye: 0xffffff, build: 0.95 },
+    { hp: 0.85, atk: 0.95, speed: 3.8, aggro: 16, range: 1.9, windup: 0.35, cd: 0.9, kb: 0.3, human: true }),
+  raider_archer: mon('raider_archer', '略奪者（弓使い）', 7, 'humanoid', { skin: 0xc89870, cloth: 0x3a4a2a, head: 'hood', weapon: 'bow', eye: 0xffffff, build: 0.9 },
+    { hp: 0.7, atk: 0.8, speed: 3.8, kb: 0.2, human: true, ...BOW, aggro: 18, range: 10 }),
+  raider_dwarf: mon('raider_dwarf', 'ドワーフの略奪者', 7, 'humanoid', { skin: 0xc8906a, cloth: 0x5a3a2a, armor: 0x6a6a72, head: 'helm', weapon: 'club', weaponColor: 0x8a8a92, size: 0.85, build: 1.35, beard: 0x8a5a3a },
+    { hp: 1.1, atk: 1.1, speed: 3.0, aggro: 14, range: 1.8, windup: 0.5, cd: 1.2, kb: 0.6, defense: 3, human: true }),
+  raider_boss: mon('raider_boss', '略奪者の頭目', 6, 'humanoid', { skin: 0xd0a080, cloth: 0x2a1a1a, armor: 0x3a3a46, head: 'helm', weapon: 'sword', shield: 0x5a3a2a, size: 1.1, eye: 0xff6a3a },
+    { hp: 0.9, atk: 0.9, speed: 3.6, aggro: 18, range: 2.0, windup: 0.4, cd: 1.0, kb: 0.6, defense: 4, human: true }),
 
   // ---- 第3層 石像の遺跡
   nameless_statue: mon('nameless_statue', '無名の石像', 7, 'golem', { stone: 0xa8a8a0, dark: 0x7a7a72, glow: null, headless: true }, { hp: 1.2, defense: 6, speed: 1.8, aggro: 8, range: 2.2, windup: 0.8, cd: 1.8, radius: 0.8, kb: 0.9 }),
@@ -467,6 +477,7 @@ export const FEATS = {
   boss: { exp: 2, text: '{name}を倒した' },                                  // 亀裂の主
   orcHero: { exp: 3, text: 'オークヒーローを倒した' },
   orcLord: { exp: 5, text: '災厄・オークロードを倒した' },
+  raiderBoss: { exp: 2, text: '略奪者の頭目を倒した' },
 };
 
 // ------------------------------------------------------------------ 素材（魔物が落とす。拠点で売る・工房で使う）
@@ -490,6 +501,8 @@ export const MATERIALS = {
   tree_sap: { name: '樹液', price: 14 },
   hard_bark: { name: '硬い樹皮', price: 12 },
   orc_trophy: { name: 'オークの戦利品', price: 42 },
+  raider_blade: { name: '略奪者の剣', price: 60 },
+  raider_armor: { name: '略奪者の革鎧', price: 50 },
 };
 // 魔物ごとの素材の種類（ないものは体の型から決める）
 const MAT_KIND = {
@@ -515,6 +528,7 @@ const MAT_BY_KIND = {
 const KIND_BY_MODEL = { beast: 'beast', golem: 'stone', spirit: 'spirit', worm: 'worm', tree: 'wood', humanoid: 'goblin' };
 // その魔物が落とす素材の表 [[素材 ID, 確率], ...]（等級の条件 [, , 最低等級] を満たすものだけ）
 export function materialTable(def) {
+  if (def.human) return [];   // 略奪者は RAIDERS.drops
   const kind = MAT_KIND[def.id] ?? KIND_BY_MODEL[def.model] ?? 'goblin';
   return MAT_BY_KIND[kind].filter(([, , g]) => g === undefined || def.grade <= g).map(([id, ch]) => [id, ch]);
 }
@@ -529,11 +543,28 @@ export const RECIPES = [
   { id: 'potion2', name: '回復薬（樹液）', makes: 'potion', needs: { tree_sap: 2 }, desc: '樹液を煮詰めて回復薬を作る。' },
   { id: 'hone', name: '武器を研ぐ', makes: 'hone', needs: { ore_chunk: 3, rusty_blade: 2 }, max: 5, bonus: 2, desc: '攻撃力 +2（5 回まで）。' },
   { id: 'patch', name: '防具を補強する', makes: 'patch', needs: { beast_hide: 3, bone_shard: 2 }, max: 5, bonus: 6, desc: '最大 HP +6（5 回まで）。' },
+  { id: 'hone2', name: '武器を研ぐ（略奪者の剣を使う）', makes: 'hone', needs: { raider_blade: 1, ore_chunk: 1 }, max: 5, desc: '略奪者の剣を溶かして刃を鍛える。攻撃力 +2（研ぐ回数に数える）。' },
+  { id: 'patch2', name: '防具を補強する（略奪者の革鎧を使う）', makes: 'patch', needs: { raider_armor: 1, beast_hide: 1 }, max: 5, desc: '略奪者の革鎧を当て布にする。最大 HP +6（補強の回数に数える）。' },
 ];
 
 // デバッグ用の機能（メニューに「デバッグ」の欄を出す：松明を常に灯す・無敵・魔物を全滅・時間を進める・各階層へワープ）。
 // 配布するときは menu: false にする
 export const DEBUG = { menu: true };
+
+// ------------------------------------------------------------------ 略奪者
+// 迷宮に入った冒険者を襲い、持ち物を奪う人間たち。出現率は低いが、浅い層では魔物以上の脅威になる。
+//  ・階層に入ったとき、深さごとの確率（chance）でパーティ（party 人。3 人以上なら頭目つき）が潜んでいる
+//  ・獲物を探して階層を歩き回り、一度見つけたらどこまでも追ってくる。魔物と違って安全地帯にも入ってくる
+//  ・近接攻撃が当たると steal.chance の確率で持ち物を奪う（魔石の一部 → なければ素材 → なければ回復薬・松明）。奪うといったん逃げる
+//  ・倒すと奪われた物をすべて取り返せる。ほかに装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。精髄と魔石は落とさない
+export const RAIDERS = {
+  byDepth: { 1: { chance: 0.25, party: [1, 2] }, 2: { chance: 0.35, party: [2, 3] }, 3: { chance: 0.2, party: [2, 4] } },
+  members: [['raider_sword', 4], ['raider_archer', 2], ['raider_dwarf', 1]],
+  leader: 'raider_boss',
+  steal: { chance: 0.45, stoneFrac: 0.3, flee: 7 },
+  drops: [['raider_blade', 0.45], ['raider_armor', 0.3], ['potion', 0.3], ['torch', 0.25], ['bag', 0.35]],
+  bag: { grades: [9, 9, 8], count: [2, 5] },   // 魔石の袋の中身
+};
 
 // ------------------------------------------------------------------ 第3層のギミック
 // 魔女の目：魔女の森に滞在した時間（hoursPerStack ごと）と、森で倒した魔物（perKill）で蓄積する（最大 max 段階）。

@@ -461,6 +461,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   world.projectiles = [];
   world.fieldKey = null;
   world.groupSeq = 0;
+  world.raiderWarned = false;
   world.reinforce = {};
   for (const el of document.querySelectorAll('.ebar')) el.remove();
   const rnd = seeded(floorDef.id * 7919 + (floorDef.generator ? (world.run?.seed ?? 1) : 0));
@@ -746,7 +747,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     }
     for (const o of restore.orbs) placeOrb(o.id, o.x, o.z);
     for (const [x, z, grade] of restore.stones) placeStone(x, z, grade ?? 9);
-    for (const [x, z, kind, id] of restore.loot ?? []) placeLoot(x, z, kind, id);
+    for (const [x, z, kind, id, payload] of restore.loot ?? []) placeLoot(x, z, kind, id, payload);
+    for (const m of world.monsters) if (m.def.human) m.stolen = restore.monsters.find(r => r.id === m.def.id && Math.abs(r.x - m.pos.x) < 0.01)?.stolen ?? null;
   } else {
     for (const sc of world.spawnCells) spawnMonster(sc.id, cellCenter(sc.r, sc.c), world.grid[sc.r][sc.c] === floorDef.bossMonster);
     // 群れ（地域ごとの魔物の表から）
@@ -770,6 +772,11 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
       }
       world.abyssEvent = true;
     } else world.abyssEvent = false;
+  }
+  // 略奪者：深さごとの確率で、パーティが潜んでいる（亀裂・試験用の階層にはいない）
+  if (!restore && !floorDef.isSpecialRift && !floorDef.test) {
+    const R = D.RAIDERS.byDepth[floorDef.depth];
+    if (R && (world.forceRaiders || Math.random() < R.chance)) spawnRaiders(R.party, 28);
   }
   // 日付が変わったときの出現地点（群れの場所）
   for (const [r, c] of markers) world.spawnCells.push({ r, c, region: world.regions[r][c] });
@@ -1035,7 +1042,8 @@ function lineOfSight(a, b) {
 }
 
 // マス目の幅優先探索で、目標へ向かう次のマスの中心を返す
-function nextStepToward(from, to) {
+// allowSafe：安全地帯も通る（略奪者）。maxDist：どこまで探すか（マス。略奪者は階層の端から端まで探す）
+function nextStepToward(from, to, allowSafe = false, maxDist = 30) {
   const sr = Math.round(from.z / T), sc = Math.round(from.x / T);
   const tr = Math.round(to.z / T), tc = Math.round(to.x / T);
   if (sr === tr && sc === tc) return to.clone();
@@ -1045,11 +1053,11 @@ function nextStepToward(from, to) {
   for (let qi = 0; qi < queue.length; qi++) {
     const [r, c] = queue[qi];
     if (r === tr && c === tc) break;
-    if (Math.abs(r - sr) + Math.abs(c - sc) > 30) continue;   // 遠すぎる所までは探さない
+    if (Math.abs(r - sr) + Math.abs(c - sc) > maxDist) continue;   // 遠すぎる所までは探さない
     for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nr = r + dr, nc = c + dc;
       // 魔物は壁・木などの障害物・安全地帯を通れない
-      if (isWallCell(nr, nc) || 'PTM'.includes(world.grid[nr][nc]) || isSafeCell(nr, nc) || prev.has(key(nr, nc))) continue;
+      if (isWallCell(nr, nc) || 'PTM'.includes(world.grid[nr][nc]) || (!allowSafe && isSafeCell(nr, nc)) || prev.has(key(nr, nc))) continue;
       prev.set(key(nr, nc), key(r, c));
       queue.push([nr, nc]);
     }
@@ -1298,10 +1306,13 @@ function killMonster(m) {
   if (m.def.id.startsWith('abyss_')) gainFeat('abyss', { name: m.def.name });
   if (m.def.id === 'orc_hero') gainFeat('orcHero');
   if (m.def.id === 'orc_lord') gainFeat('orcLord');
+  if (m.def.id === D.RAIDERS.leader) gainFeat('raiderBoss');
   // 素材とアイテム（確率で落とす）
   for (const [id, ch] of D.materialTable(D.MONSTERS[m.def.id])) if (Math.random() < ch * (m.boss ? 3 : 1) || world.forceLoot) placeLoot(m.pos.x + (Math.random() - 0.5) * 1.4, m.pos.z + (Math.random() - 0.5) * 1.4, 'mat', id);
   for (const [item, ch] of D.ITEM_DROPS) if (Math.random() < ch || world.forceLoot) placeLoot(m.pos.x + (Math.random() - 0.5) * 1.4, m.pos.z + (Math.random() - 0.5) * 1.4, 'item', item);
   burst(new THREE.Vector3(m.pos.x, 0.8, m.pos.z), 0xbfe8ff, 40, 5, 3);
+  // 略奪者（人間）：魔石・精髄は落とさない。奪った物を返し、装備やアイテムを落とす
+  if (m.def.human) { raiderDrops(m); return; }
   // 魔石：必ず 1 個（パッシブ「漁り屋」で個数が増える）。等級は魔物の強さで決まる
   const count = 1 + player.st.extraStones;
   for (let i = 0; i < count; i++) {
@@ -1325,20 +1336,26 @@ function placeStone(x, z, grade = 9) {
 
 // 落とし物（素材の袋・回復薬・松明）。近づくと自動で拾う
 const LOOT_LOOK = { mat: 0xb08a5a, potion: 0xe04a4a, torch: 0xffa040 };
-function placeLoot(x, z, kind, id) {
+function placeLoot(x, z, kind, id, payload = null) {
   const g = new THREE.Group();
   const color = kind === 'mat' ? LOOT_LOOK.mat : LOOT_LOOK[id] ?? 0xffffff;
   let body;
   if (kind === 'mat') { body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.17, 0), flatMat(color)); body.scale.set(1, 0.8, 1); }
+  else if (kind === 'bag') { body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 7, 5), flatMat(0x7a5a3a)); body.scale.set(1, 0.85, 1);
+    const tie = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.14, 5), new THREE.MeshStandardMaterial({ color: 0x55c8ff, emissive: 0x2a6aa0 })); tie.position.y = 0.2; body.add(tie); }
   else if (id === 'potion') { body = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.3, 6), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4 })); }
   else { body = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.45, 5), flatMat(0x6a4a2a)); const f = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.16, 5), new THREE.MeshBasicMaterial({ color })); f.position.y = 0.28; body.add(f); }
   body.position.y = 0.25;
   g.add(body);
   g.position.set(x, 0, z);
   world.root.add(g);
-  world.loot.push({ group: g, body, pos: g.position, kind, id, t: Math.random() * 5 });
+  world.loot.push({ group: g, body, pos: g.position, kind, id, payload, t: Math.random() * 5 });
 }
 function pickLoot(l) {
+  if (l.kind === 'bag') {
+    mergeStones(world.run.stones, l.payload ?? {});
+    return `魔石の袋（${stoneText(l.payload ?? {})}）`;
+  }
   if (l.kind === 'mat') {
     world.run.mats[l.id] = (world.run.mats[l.id] || 0) + 1;
     return D.MATERIALS[l.id].name;
@@ -1506,13 +1523,15 @@ function updateMonsters(dt) {
     const toP = new THREE.Vector3(player.pos.x - m.pos.x, 0, player.pos.z - m.pos.z);
     const dist = toP.length();
     // 遠くの魔物は動かさない（広い階層でも重くならないように）
-    const far = dist > 60 && !m.aggro;
+    const far = dist > 60 && !m.aggro && !def.human;   // 略奪者は遠くにいても獲物を探して動く
     m.model.group.visible = dist < Math.min(75, (scene.fog?.far ?? 60) + 10);   // 霧の向こうは描かない
     if (far) continue;
     const playerSafe = isSafeCell(Math.round(player.pos.z / T), Math.round(player.pos.x / T));
-    const sees = !playerSafe && dist < def.aggroRange && lineOfSight(m.pos, player.pos);
-    if (sees && !m.aggro) { m.aggro = true; onAggro(m); }
-    if (m.aggro && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
+    // 略奪者（人間）は安全地帯にも入ってくるし、一度見つけたらどこまでも追ってくる
+    const sees = (!playerSafe || def.human) && dist < def.aggroRange && lineOfSight(m.pos, player.pos);
+    if (sees && !m.aggro) { m.aggro = true; onAggro(m); if (def.human) raiderSpotted(m); }
+    if (m.aggro && !def.human && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
+    m.fleeTime = Math.max(0, (m.fleeTime ?? 0) - dt);
     const prevX = m.pos.x, prevZ = m.pos.z;
     m.cooldown = Math.max(0, m.cooldown - dt);
 
@@ -1533,6 +1552,24 @@ function updateMonsters(dt) {
     switch (m.state) {
       case 'idle':
       case 'chase':
+        if (def.human && m.fleeTime > 0) {
+          // 奪ったあとは、いったん逃げる
+          m.state = 'idle';
+          const away = new THREE.Vector3(m.pos.x - player.pos.x, 0, m.pos.z - player.pos.z).normalize();
+          moveDir = away; speedMul = 1.15;
+          m.facing = turnToward(m.facing, Math.atan2(-away.x, -away.z), dt * 8);
+          break;
+        }
+        if (def.human && !m.aggro) {
+          // 獲物を探して、プレイヤーのいるほうへ少しずつ歩いていく（経路をたどる）
+          m.state = 'idle';
+          m.pathTimer -= dt;
+          if (m.pathTimer <= 0 || !m.path) { m.path = nextStepToward(m.pos, player.pos, true, 999); m.pathTimer = 1.0; }
+          const tgt = m.path ?? player.pos;
+          const w = new THREE.Vector3(tgt.x - m.pos.x, 0, tgt.z - m.pos.z);
+          if (w.length() > 0.3) { moveDir = w.normalize(); speedMul = 0.45; m.facing = turnToward(m.facing, Math.atan2(-w.x, -w.z), dt * 4); }
+          break;
+        }
         if (m.aggro) {
           m.state = 'chase';
           // 群れの魔物は、割り当てられた位置（標的の周り）に回り込んでから攻撃する（最大 3 秒）
@@ -1553,8 +1590,9 @@ function updateMonsters(dt) {
             if (sees) moveDir = toP.clone().normalize();
             else {
               m.pathTimer -= dt;
-              if (m.pathTimer <= 0 || !m.path) { m.path = nextStepToward(m.pos, player.pos); m.pathTimer = 0.5; }
+              if (m.pathTimer <= 0 || !m.path) { m.path = nextStepToward(m.pos, player.pos, def.human, def.human ? 999 : 30); m.pathTimer = 0.5; }
               if (m.path) moveDir = new THREE.Vector3(m.path.x - m.pos.x, 0, m.path.z - m.pos.z).normalize();
+              else if (def.human) moveDir = toP.clone().normalize();
             }
           }
           m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * 8);
@@ -1582,7 +1620,10 @@ function updateMonsters(dt) {
           if (def.ranged) fireProjectile(m);
           else if (dist < def.attackRange + 0.6) {
             const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
-            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) hurtPlayer(m.attack, m.pos.x, m.pos.z);
+            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) {
+              hurtPlayer(m.attack, m.pos.x, m.pos.z);
+              if (def.human && !player.dead && Math.random() < D.RAIDERS.steal.chance) raiderSteal(m);
+            }
           }
         }
         break;
@@ -1612,7 +1653,7 @@ function updateMonsters(dt) {
     if (pd < pmin && pd > 1e-4) { m.pos.x += (m.pos.x - player.pos.x) / pd * (pmin - pd); m.pos.z += (m.pos.z - player.pos.z) / pd * (pmin - pd); }
     collide(m.pos, def.radius);
     // 魔物は安全地帯に入れない
-    if (isSafeCell(Math.round(m.pos.z / T), Math.round(m.pos.x / T))) { m.pos.x = prevX; m.pos.z = prevZ; }
+    if (!def.human && isSafeCell(Math.round(m.pos.z / T), Math.round(m.pos.x / T))) { m.pos.x = prevX; m.pos.z = prevZ; }
 
     animateMonster(m, moveDir ? def.speed * speedMul : 0);
   }
@@ -1789,7 +1830,7 @@ function updatePickups(dt) {
     l.body.position.y = 0.25 + Math.sin(l.t * 3) * 0.05;
     const d = Math.hypot(player.pos.x - l.pos.x, player.pos.z - l.pos.z);
     // 近づくと吸い寄せられる（持てない物は寄ってこない）
-    const canTake = l.kind === 'mat' || save[l.id === 'potion' ? 'potions' : 'torches'] < D.HUB[l.id].max;
+    const canTake = l.kind === 'mat' || l.kind === 'bag' || save[l.id === 'potion' ? 'potions' : 'torches'] < D.HUB[l.id].max;
     if (d < 3 && canTake && !player.dead) {
       l.pos.x += (player.pos.x - l.pos.x) * Math.min(1, dt * 6);
       l.pos.z += (player.pos.z - l.pos.z) * Math.min(1, dt * 6);
@@ -1904,6 +1945,86 @@ function fadeTransition(fn) {
     if (world.state === 'transition') world.state = 'playing';
     setTimeout(() => el.classList.remove('on'), 60);
   }, 350);
+}
+
+// ====================================================================== 略奪者
+// プレイヤーから minDist m 以上離れた所にパーティを出す。3 人以上なら頭目がつく
+function spawnRaiders([lo, hi], minDist = 28) {
+  const n = lo + Math.floor(Math.random() * (hi - lo + 1));
+  const cells = [];
+  for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
+    if (isWallCell(r, c) || '.mC^K'.indexOf(world.grid[r][c]) < 0) continue;
+    if (cellCenter(r, c).distanceTo(player.pos) >= minDist) cells.push([r, c]);
+  }
+  if (!cells.length) return [];
+  const [r, c] = cells[Math.floor(Math.random() * cells.length)];
+  const center = cellCenter(r, c);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let id;
+    if (n >= 3 && i === 0) id = D.RAIDERS.leader;
+    else { const list = D.RAIDERS.members, tot = list.reduce((s, [, w]) => s + w, 0); let x = Math.random() * tot; id = list.find(([, w]) => (x -= w) <= 0)?.[0] ?? list[0][0]; }
+    const p = center.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2.5, 0, (Math.random() - 0.5) * 2.5));
+    collide(p, 0.45);
+    const m = spawnMonster(id, p);
+    m.stolen = null;
+    out.push(m);
+  }
+  world.raidersHere = true;
+  log('どこかで冒険者の悲鳴が聞こえた……。この層には略奪者がいるかもしれない。');
+  return out;
+}
+function raiderSpotted(m) {
+  if (world.raiderWarned) return;
+  world.raiderWarned = true;
+  log(`${m.def.name}に見つかった！ 持ち物を奪われないよう気をつけろ。`);
+}
+// 奪う：魔石の一部（等級の高い物から）→ なければ素材 → なければ回復薬・松明
+function raiderSteal(m) {
+  const run = world.run;
+  m.stolen ??= { stones: {}, mats: {}, potions: 0, torches: 0 };
+  let what = null;
+  const total = stoneCount(run.stones);
+  if (total > 0) {
+    let take = Math.max(1, Math.round(total * D.RAIDERS.steal.stoneFrac));
+    const got = {};
+    for (const g of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+      while (take > 0 && (run.stones[g] ?? 0) > 0) { run.stones[g]--; if (!run.stones[g]) delete run.stones[g]; got[g] = (got[g] || 0) + 1; take--; }
+    }
+    mergeStones(m.stolen.stones, got);
+    what = `魔石（${stoneText(got)}）`;
+  } else if (Object.keys(run.mats ?? {}).length) {
+    const ids = Object.keys(run.mats), id = ids[Math.floor(Math.random() * ids.length)];
+    run.mats[id]--; if (!run.mats[id]) delete run.mats[id];
+    m.stolen.mats[id] = (m.stolen.mats[id] || 0) + 1;
+    what = D.MATERIALS[id].name;
+  } else if (save.potions > 0) { save.potions--; m.stolen.potions++; what = D.HUB.potion.name; }
+  else if (save.torches > 0) { save.torches--; m.stolen.torches++; what = D.HUB.torch.name; }
+  if (!what) return;
+  m.fleeTime = D.RAIDERS.steal.flee;
+  const p = player.pos.clone(); p.y = 2.2;
+  popup(p, `奪われた：${what}`, 'hurt');
+  log(`${m.def.name}に${what}を奪われた！ 倒せば取り返せる。`);
+}
+// 倒したとき：奪った物を返し、装備・アイテム・魔石の袋を確率で落とす
+function raiderDrops(m) {
+  const at = () => [m.pos.x + (Math.random() - 0.5) * 1.6, m.pos.z + (Math.random() - 0.5) * 1.6];
+  const st = m.stolen;
+  const bag = {};
+  if (st) {
+    mergeStones(bag, st.stones);
+    for (const [id, n] of Object.entries(st.mats)) for (let i = 0; i < n; i++) placeLoot(...at(), 'mat', id);
+    for (let i = 0; i < st.potions; i++) placeLoot(...at(), 'item', 'potion');
+    for (let i = 0; i < st.torches; i++) placeLoot(...at(), 'item', 'torch');
+  }
+  for (const [id, ch] of D.RAIDERS.drops) {
+    if (!(Math.random() < ch || world.forceLoot)) continue;
+    if (id === 'bag') { const B = D.RAIDERS.bag; const n = B.count[0] + Math.floor(Math.random() * (B.count[1] - B.count[0] + 1)); for (let i = 0; i < n; i++) addStone(bag, B.grades[Math.floor(Math.random() * B.grades.length)]); }
+    else if (D.MATERIALS[id]) placeLoot(...at(), 'mat', id);
+    else placeLoot(...at(), 'item', id);
+  }
+  if (stoneCount(bag)) placeLoot(...at(), 'bag', 'bag', bag);
+  if (st && (stoneCount(st.stones) || Object.keys(st.mats).length || st.potions || st.torches)) log('奪われた物を取り返した！');
 }
 
 // ====================================================================== 階層・フィールドのギミック
@@ -2333,10 +2454,10 @@ function runSnapshot() {
     player: { x: player.pos.x, z: player.pos.z, yaw: camState.yaw, hp: player.hp, stamina: player.stamina, cooldowns: player.skillCooldowns },
     portals: world.portals.map(p => ({ kind: p.kind, cell: p.cell, target: p.target, rot: p.model.group.rotation.y })),
     monsters: world.monsters.filter(m => m.state !== 'dead')
-      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss, rk: m.regionKey ?? null, gid: m.groupId ?? 0, pi: m.packIndex ?? 0, ps: m.packSize ?? 1 })),
+      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss, rk: m.regionKey ?? null, gid: m.groupId ?? 0, pi: m.packIndex ?? 0, ps: m.packSize ?? 1, stolen: m.stolen ?? null })),
     orbs: world.orbs.map(o => ({ id: o.id, x: o.pos.x, z: o.pos.z })),
     stones: world.stones.map(st => [st.pos.x, st.pos.z, st.grade]),
-    loot: world.loot.map(l => [l.pos.x, l.pos.z, l.kind, l.id]),
+    loot: world.loot.map(l => [l.pos.x, l.pos.z, l.kind, l.id, l.payload]),
   };
 }
 function autosave() {
@@ -2468,6 +2589,7 @@ function debugMenuHTML() {
         <button class="btn small" id="dbg-kill">周りの魔物を全滅</button>
         <button class="btn small" id="dbg-day">時間を 1 日進める</button>
         <button class="btn small" id="dbg-heal">HP・スタミナ全回復</button>
+        <button class="btn small" id="dbg-raiders">略奪者を呼ぶ</button>
       </div>
       <div class="muted" style="margin:6px 0 2px">ワープ</div>
       <div class="btns row">${DEBUG_WARPS.map(([id, name]) => `<button class="btn small" data-warp="${id}">${name}</button>`).join('')}</div>
@@ -2490,6 +2612,7 @@ function bindDebugMenu() {
     closeModal();
   };
   $('#dbg-heal').onclick = () => { player.hp = player.st.maxHp; player.stamina = player.st.maxStamina; openMenu(); };
+  $('#dbg-raiders').onclick = () => { const ms = spawnRaiders([3, 3], 14); log(`（デバッグ）略奪者 ${ms.length} 人を呼んだ`); closeModal(); };
   document.querySelectorAll('#menu-card [data-warp]').forEach(b => b.onclick = () => debugWarp(Number(b.dataset.warp)));
 }
 // 指定した階層へワープする（第3層は通った第2層のエリアの方角から着く。なければ亡者の地から来た扱い）
@@ -2764,7 +2887,7 @@ window.game = {
   gainFeat,
   kill(m) { if (m.state !== 'dead') killMonster(m); },
   spawn(id, x, z, boss = false) { return spawnMonster(id, new THREE.Vector3(x, 0, z), boss); },
-  regionKeyAt, regionAt, isSafeCell, touchStele,
+  regionKeyAt, regionAt, isSafeCell, touchStele, spawnRaiders, raiderSteal,
   aggro(m) { if (!m.aggro) { m.aggro = true; onAggro(m); } },
   stoneCount, stoneValue,
   attack() { input.pressed.add('attack'); },
