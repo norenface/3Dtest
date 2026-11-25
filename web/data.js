@@ -555,13 +555,11 @@ export const DEBUG = { menu: true };
 // 迷宮に入った冒険者を襲い、持ち物を奪う人間たち。出現率は低いが、浅い層では魔物以上の脅威になる。
 //  ・階層に入ったとき、深さごとの確率（chance）でパーティ（party 人。3 人以上なら頭目つき）が潜んでいる
 //  ・獲物を探して階層を歩き回り、一度見つけたらどこまでも追ってくる。魔物と違って安全地帯にも入ってくる
-//  ・近接攻撃が当たると steal.chance の確率で持ち物を奪う（魔石の一部 → なければ素材 → なければ回復薬・松明）。奪うといったん逃げる
-//  ・倒すと奪われた物をすべて取り返せる。ほかに装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。精髄と魔石は落とさない
+//  ・倒すと装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。精髄と魔石は落とさない
 export const RAIDERS = {
   byDepth: { 1: { chance: 0.25, party: [1, 2] }, 2: { chance: 0.35, party: [2, 3] }, 3: { chance: 0.2, party: [2, 4] } },
   members: [['raider_sword', 4], ['raider_archer', 2], ['raider_dwarf', 1]],
   leader: 'raider_boss',
-  steal: { chance: 0.45, stoneFrac: 0.3, flee: 7 },
   drops: [['raider_blade', 0.45], ['raider_armor', 0.3], ['potion', 0.3], ['torch', 0.25], ['bag', 0.35]],
   bag: { grades: [9, 9, 8], count: [2, 5] },   // 魔石の袋の中身
 };

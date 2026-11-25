@@ -74,6 +74,9 @@ const recipeBonus = id => D.RECIPES.find(r => r.id === id)?.bonus ?? 0;
 // ====================================================================== 功績・経験値・レベル
 // 功績を上げると経験値が入り、たまるとレベルが上がる（D.FEATS / D.LEVEL）
 function gainFeat(kind, vars = {}) {
+  try { gainFeatInner(kind, vars); } catch (e) { reportError(e); }
+}
+function gainFeatInner(kind, vars) {
   const f = D.FEATS[kind];
   if (!f) return;
   const text = f.text.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
@@ -748,7 +751,6 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     for (const o of restore.orbs) placeOrb(o.id, o.x, o.z);
     for (const [x, z, grade] of restore.stones) placeStone(x, z, grade ?? 9);
     for (const [x, z, kind, id, payload] of restore.loot ?? []) placeLoot(x, z, kind, id, payload);
-    for (const m of world.monsters) if (m.def.human) m.stolen = restore.monsters.find(r => r.id === m.def.id && Math.abs(r.x - m.pos.x) < 0.01)?.stolen ?? null;
   } else {
     for (const sc of world.spawnCells) spawnMonster(sc.id, cellCenter(sc.r, sc.c), world.grid[sc.r][sc.c] === floorDef.bossMonster);
     // 群れ（地域ごとの魔物の表から）
@@ -779,6 +781,9 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     // （自動テストで window.__testNoRaiders を立てたときは出さない）
     if (R && !window.__testNoRaiders && (world.forceRaiders || Math.random() < R.chance)) spawnRaiders(R.party, 28);
   }
+  // 落とし物（素材・回復薬・松明・魔石の袋）や精髄・魔石を、見えない所に 1 つずつ置いて描画の準備を先に済ませる
+  // （スマホでは初めて画面に出る物の準備に時間がかかり、倒した瞬間に一瞬固まることがあるため）
+  warmUpDrops(root);
   // 日付が変わったときの出現地点（群れの場所）
   for (const [r, c] of markers) world.spawnCells.push({ r, c, region: world.regions[r][c] });
 }
@@ -1335,6 +1340,19 @@ function placeStone(x, z, grade = 9) {
   world.stones.push({ model: s, pos: s.group.position, t: Math.random() * 5, grade });
 }
 
+function warmUpDrops(root) {
+  const keep = world.loot.length;
+  const g = new THREE.Group();
+  g.position.set(0, -40, 0);   // 床の下（見えない）
+  root.add(g);
+  const add = o => { o.position.set(0, 0, 0); g.add(o); };
+  placeLoot(0, 0, 'mat', 'beast_hide'); placeLoot(0, 0, 'item', 'potion'); placeLoot(0, 0, 'item', 'torch'); placeLoot(0, 0, 'bag', 'bag', {});
+  for (const l of world.loot.splice(keep)) add(l.group);
+  add(makeEssenceOrb(0xffffff).group);
+  add(makeMagicStone(0x55c8ff, 1).group);
+  try { renderer.compile(scene, camera); } catch (e) { /* 準備できなくても遊べる */ }
+}
+
 // 落とし物（素材の袋・回復薬・松明）。近づくと自動で拾う
 const LOOT_LOOK = { mat: 0xb08a5a, potion: 0xe04a4a, torch: 0xffa040 };
 function placeLoot(x, z, kind, id, payload = null) {
@@ -1532,7 +1550,6 @@ function updateMonsters(dt) {
     const sees = (!playerSafe || def.human) && dist < def.aggroRange && lineOfSight(m.pos, player.pos);
     if (sees && !m.aggro) { m.aggro = true; onAggro(m); if (def.human) raiderSpotted(m); }
     if (m.aggro && !def.human && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
-    m.fleeTime = Math.max(0, (m.fleeTime ?? 0) - dt);
     const prevX = m.pos.x, prevZ = m.pos.z;
     m.cooldown = Math.max(0, m.cooldown - dt);
 
@@ -1553,14 +1570,6 @@ function updateMonsters(dt) {
     switch (m.state) {
       case 'idle':
       case 'chase':
-        if (def.human && m.fleeTime > 0) {
-          // 奪ったあとは、いったん逃げる
-          m.state = 'idle';
-          const away = new THREE.Vector3(m.pos.x - player.pos.x, 0, m.pos.z - player.pos.z).normalize();
-          moveDir = away; speedMul = 1.15;
-          m.facing = turnToward(m.facing, Math.atan2(-away.x, -away.z), dt * 8);
-          break;
-        }
         if (def.human && !m.aggro) {
           // 獲物を探して、プレイヤーのいるほうへ少しずつ歩いていく（経路をたどる）
           m.state = 'idle';
@@ -1621,10 +1630,7 @@ function updateMonsters(dt) {
           if (def.ranged) fireProjectile(m);
           else if (dist < def.attackRange + 0.6) {
             const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
-            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) {
-              hurtPlayer(m.attack, m.pos.x, m.pos.z);
-              if (def.human && !player.dead && Math.random() < D.RAIDERS.steal.chance) raiderSteal(m);
-            }
+            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) hurtPlayer(m.attack, m.pos.x, m.pos.z);
           }
         }
         break;
@@ -1942,9 +1948,12 @@ function fadeTransition(fn) {
   input.clear();
   el.classList.add('on');
   setTimeout(() => {
-    fn();
-    if (world.state === 'transition') world.state = 'playing';
-    setTimeout(() => el.classList.remove('on'), 60);
+    try { fn(); } catch (e) { reportError(e); }
+    finally {
+      // 途中でエラーが起きても、暗転したまま止まらないようにする
+      if (world.state === 'transition') world.state = 'playing';
+      setTimeout(() => el.classList.remove('on'), 60);
+    }
   }, 350);
 }
 
@@ -1968,7 +1977,6 @@ function spawnRaiders([lo, hi], minDist = 28) {
     const p = center.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2.5, 0, (Math.random() - 0.5) * 2.5));
     collide(p, 0.45);
     const m = spawnMonster(id, p);
-    m.stolen = null;
     out.push(m);
   }
   world.raidersHere = true;
@@ -1978,46 +1986,12 @@ function spawnRaiders([lo, hi], minDist = 28) {
 function raiderSpotted(m) {
   if (world.raiderWarned) return;
   world.raiderWarned = true;
-  log(`${m.def.name}に見つかった！ 持ち物を奪われないよう気をつけろ。`);
+  log(`${m.def.name}に見つかった！ 襲ってくるぞ。`);
 }
-// 奪う：魔石の一部（等級の高い物から）→ なければ素材 → なければ回復薬・松明
-function raiderSteal(m) {
-  const run = world.run;
-  m.stolen ??= { stones: {}, mats: {}, potions: 0, torches: 0 };
-  let what = null;
-  const total = stoneCount(run.stones);
-  if (total > 0) {
-    let take = Math.max(1, Math.round(total * D.RAIDERS.steal.stoneFrac));
-    const got = {};
-    for (const g of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
-      while (take > 0 && (run.stones[g] ?? 0) > 0) { run.stones[g]--; if (!run.stones[g]) delete run.stones[g]; got[g] = (got[g] || 0) + 1; take--; }
-    }
-    mergeStones(m.stolen.stones, got);
-    what = `魔石（${stoneText(got)}）`;
-  } else if (Object.keys(run.mats ?? {}).length) {
-    const ids = Object.keys(run.mats), id = ids[Math.floor(Math.random() * ids.length)];
-    run.mats[id]--; if (!run.mats[id]) delete run.mats[id];
-    m.stolen.mats[id] = (m.stolen.mats[id] || 0) + 1;
-    what = D.MATERIALS[id].name;
-  } else if (save.potions > 0) { save.potions--; m.stolen.potions++; what = D.HUB.potion.name; }
-  else if (save.torches > 0) { save.torches--; m.stolen.torches++; what = D.HUB.torch.name; }
-  if (!what) return;
-  m.fleeTime = D.RAIDERS.steal.flee;
-  const p = player.pos.clone(); p.y = 2.2;
-  popup(p, `奪われた：${what}`, 'hurt');
-  log(`${m.def.name}に${what}を奪われた！ 倒せば取り返せる。`);
-}
-// 倒したとき：奪った物を返し、装備・アイテム・魔石の袋を確率で落とす
+// 倒したとき：装備・アイテム・魔石の袋を確率で落とす（精髄と魔石そのものは落とさない）
 function raiderDrops(m) {
   const at = () => [m.pos.x + (Math.random() - 0.5) * 1.6, m.pos.z + (Math.random() - 0.5) * 1.6];
-  const st = m.stolen;
   const bag = {};
-  if (st) {
-    mergeStones(bag, st.stones);
-    for (const [id, n] of Object.entries(st.mats)) for (let i = 0; i < n; i++) placeLoot(...at(), 'mat', id);
-    for (let i = 0; i < st.potions; i++) placeLoot(...at(), 'item', 'potion');
-    for (let i = 0; i < st.torches; i++) placeLoot(...at(), 'item', 'torch');
-  }
   for (const [id, ch] of D.RAIDERS.drops) {
     if (!(Math.random() < ch || world.forceLoot)) continue;
     if (id === 'bag') { const B = D.RAIDERS.bag; const n = B.count[0] + Math.floor(Math.random() * (B.count[1] - B.count[0] + 1)); for (let i = 0; i < n; i++) addStone(bag, B.grades[Math.floor(Math.random() * B.grades.length)]); }
@@ -2025,7 +1999,6 @@ function raiderDrops(m) {
     else placeLoot(...at(), 'item', id);
   }
   if (stoneCount(bag)) placeLoot(...at(), 'bag', 'bag', bag);
-  if (st && (stoneCount(st.stones) || Object.keys(st.mats).length || st.potions || st.torches)) log('奪われた物を取り返した！');
 }
 
 // ====================================================================== 階層・フィールドのギミック
@@ -2455,7 +2428,7 @@ function runSnapshot() {
     player: { x: player.pos.x, z: player.pos.z, yaw: camState.yaw, hp: player.hp, stamina: player.stamina, cooldowns: player.skillCooldowns },
     portals: world.portals.map(p => ({ kind: p.kind, cell: p.cell, target: p.target, rot: p.model.group.rotation.y })),
     monsters: world.monsters.filter(m => m.state !== 'dead')
-      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss, rk: m.regionKey ?? null, gid: m.groupId ?? 0, pi: m.packIndex ?? 0, ps: m.packSize ?? 1, stolen: m.stolen ?? null })),
+      .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss, rk: m.regionKey ?? null, gid: m.groupId ?? 0, pi: m.packIndex ?? 0, ps: m.packSize ?? 1 })),
     orbs: world.orbs.map(o => ({ id: o.id, x: o.pos.x, z: o.pos.z })),
     stones: world.stones.map(st => [st.pos.x, st.pos.z, st.grade]),
     loot: world.loot.map(l => [l.pos.x, l.pos.z, l.kind, l.id, l.payload]),
@@ -2734,19 +2707,40 @@ function releasePointer() {
 // ====================================================================== メインループ
 let last = performance.now();
 function frame(now) {
+  // 次のフレームを先に予約する（途中でエラーが起きても、ゲームが止まったままにならないように）
+  requestAnimationFrame(frame);
   // 重い端末でフレームが遅れても、ゲームの速さが落ちすぎないよう 0.1 秒まで受け付ける
   const rawDt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  step(rawDt);
-  renderer.autoClear = true;
-  renderer.render(scene, camera);
-  if (world.state === 'playing' && player.viewmodel.group.visible) {
-    renderer.autoClear = false;
-    renderer.clearDepth();
-    renderer.render(vmScene, vmCamera);
-  }
-  requestAnimationFrame(frame);
+  try {
+    step(rawDt);
+  } catch (e) { reportError(e); }
+  try {
+    renderer.autoClear = true;
+    renderer.render(scene, camera);
+    if (world.state === 'playing' && player.viewmodel.group.visible) {
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(vmScene, vmCamera);
+    }
+  } catch (e) { reportError(e); }
 }
+
+// エラーを画面に小さく出す（同じエラーは 1 回だけ。ゲームは続ける）
+const reportedErrors = new Set();
+function reportError(e) {
+  const msg = (e?.message ?? String(e)) + ' @ ' + ((e?.stack ?? '').split('\n')[1] ?? '').trim();
+  if (reportedErrors.has(msg)) return;
+  reportedErrors.add(msg);
+  console.error(e);
+  let box = document.getElementById('error-box');
+  if (!box) { box = document.createElement('div'); box.id = 'error-box'; document.body.appendChild(box); }
+  box.textContent = 'エラーが起きました（ゲームは続きます）：' + msg;
+  box.style.display = 'block';
+  setTimeout(() => { box.style.display = 'none'; }, 8000);
+}
+addEventListener('error', e => reportError(e.error ?? e.message));
+addEventListener('unhandledrejection', e => reportError(e.reason));
 
 // 開放日は都市でも時間が流れる（迷宮と同じ速さ）。入場フェイズが過ぎるとゲートが閉じる
 function updateCityClock(dt) {
@@ -2888,7 +2882,7 @@ window.game = {
   gainFeat,
   kill(m) { if (m.state !== 'dead') killMonster(m); },
   spawn(id, x, z, boss = false) { return spawnMonster(id, new THREE.Vector3(x, 0, z), boss); },
-  regionKeyAt, regionAt, isSafeCell, touchStele, spawnRaiders, raiderSteal,
+  regionKeyAt, regionAt, isSafeCell, touchStele, spawnRaiders,
   // 歩いてたどった距離（マス）。迷路では直線距離より正確
   pathDist(from, to) {
     const sr = Math.round(from.z / T), sc = Math.round(from.x / T), tr = Math.round(to.z / T), tc = Math.round(to.x / T);
