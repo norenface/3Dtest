@@ -339,7 +339,7 @@ const THEMES = {
   pilgrim: { floor: 0x46562e, wall: 0x6a6a60, cap: 0x7a7a6e, prop: 'tree', wallH: 4, rough: 0.4, texBoost: 1.5, tex: { floor: 'grass', wall: 'rock' } },
 };
 // 第3層はフィールドごとに床の色を変えて、どこにいるかわかるようにする
-const FIELD_FLOOR = { witch: 0x1e3420, hill: 0x67675c, orc: 0x5a4a30, swamp: 0x26382e, statue: 0x6a665a, road_w: 0x6a5e44,
+const FIELD_FLOOR = { witch: 0x2c4a30, hill: 0x67675c, orc: 0x5a4a30, swamp: 0x365444, statue: 0x6a665a, road_w: 0x6a5e44,
   plain_nw: 0x4a5a48, battle_ne: 0x4a3e34, valley_se: 0x6a5a3e, grass_sw: 0x50682e, gate_n: 0x5a5a50 };
 
 const pillarKey = (r, c) => r * 1000 + c;

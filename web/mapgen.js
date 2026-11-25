@@ -436,10 +436,10 @@ export function pilgrimRoad(seed) {
   }
   keepConnected(g, arrivals[22]);
   // 魔物の群れ：フィールドごと（オークの群落地は特に多い）
-  const counts = { witch: 6, hill: 2, orc: 6, swamp: 2, statue: 2, road_w: 2, plain_nw: 2, battle_ne: 2, valley_se: 2, grass_sw: 1, gate_n: 1 };
+  const counts = { witch: 11, hill: 5, orc: 12, swamp: 5, statue: 4, road_w: 5, plain_nw: 5, battle_ne: 5, valley_se: 5, grass_sw: 3, gate_n: 3 };
   const nearArrival = (r, c) => Object.values(arrivals).some(([ar, ac]) => Math.abs(ar - r) + Math.abs(ac - c) < 10);
   for (const [reg, n] of Object.entries(counts)) {
-    for (const [r, c] of scatter(g, rnd, n, 6, (r, c) => regions[r][c] === reg && !nearArrival(r, c) && Math.abs(r - C) + Math.abs(c - C) > 4)) g[r][c] = 'm';
+    for (const [r, c] of scatter(g, rnd, n, 5, (r, c) => regions[r][c] === reg && !nearArrival(r, c) && Math.abs(r - C) + Math.abs(c - C) > 4)) g[r][c] = 'm';
   }
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (g[r][c] === '#') regions[r][c] = null;
   return { map: toRows(g), regions, arrivals, prevCells };
