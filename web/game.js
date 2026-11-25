@@ -776,7 +776,8 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   // 略奪者：深さごとの確率で、パーティが潜んでいる（亀裂・試験用の階層にはいない）
   if (!restore && !floorDef.isSpecialRift && !floorDef.test) {
     const R = D.RAIDERS.byDepth[floorDef.depth];
-    if (R && (world.forceRaiders || Math.random() < R.chance)) spawnRaiders(R.party, 28);
+    // （自動テストで window.__testNoRaiders を立てたときは出さない）
+    if (R && !window.__testNoRaiders && (world.forceRaiders || Math.random() < R.chance)) spawnRaiders(R.party, 28);
   }
   // 日付が変わったときの出現地点（群れの場所）
   for (const [r, c] of markers) world.spawnCells.push({ r, c, region: world.regions[r][c] });
@@ -2888,6 +2889,14 @@ window.game = {
   kill(m) { if (m.state !== 'dead') killMonster(m); },
   spawn(id, x, z, boss = false) { return spawnMonster(id, new THREE.Vector3(x, 0, z), boss); },
   regionKeyAt, regionAt, isSafeCell, touchStele, spawnRaiders, raiderSteal,
+  // 歩いてたどった距離（マス）。迷路では直線距離より正確
+  pathDist(from, to) {
+    const sr = Math.round(from.z / T), sc = Math.round(from.x / T), tr = Math.round(to.z / T), tc = Math.round(to.x / T);
+    const seen = new Map([[sr * 1000 + sc, 0]]), q = [[sr, sc]];
+    for (let i = 0; i < q.length; i++) { const [r, c] = q[i]; const d = seen.get(r * 1000 + c); if (r === tr && c === tc) return d;
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nr = r + dr, nc = c + dc, k = nr * 1000 + nc; if (isWallCell(nr, nc) || seen.has(k)) continue; seen.set(k, d + 1); q.push([nr, nc]); } }
+    return Infinity;
+  },
   aggro(m) { if (!m.aggro) { m.aggro = true; onAggro(m); } },
   stoneCount, stoneValue,
   attack() { input.pressed.add('attack'); },
