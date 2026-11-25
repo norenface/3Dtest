@@ -76,9 +76,19 @@ const recipeBonus = id => D.RECIPES.find(r => r.id === id)?.bonus ?? 0;
 function gainFeat(kind, vars = {}) {
   try { gainFeatInner(kind, vars); } catch (e) { reportError(e); }
 }
+// 以前のセーブ（featsDone がない）でも、記録に残っていれば得たことにする
+function featInLog(f) {
+  const re = new RegExp('^' + f.text.split(/\{\w+\}/).map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.+') + '$');
+  return (save.feats ?? []).some(x => re.test(x.text));
+}
 function gainFeatInner(kind, vars) {
   const f = D.FEATS[kind];
   if (!f) return;
+  if (f.once) {
+    save.featsDone ??= {};
+    if (save.featsDone[kind] || featInLog(f)) { save.featsDone[kind] = true; return; }
+    save.featsDone[kind] = true;
+  }
   const text = f.text.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
   save.exp = (save.exp ?? 0) + f.exp;
   save.feats = [{ text, exp: f.exp, cycle: save.cycle, day: world.time.day }, ...(save.feats ?? [])].slice(0, D.FEAT_LOG);
@@ -1312,7 +1322,6 @@ function killMonster(m) {
   if (m.def.id.startsWith('abyss_')) gainFeat('abyss', { name: m.def.name });
   if (m.def.id === 'orc_hero') gainFeat('orcHero');
   if (m.def.id === 'orc_lord') gainFeat('orcLord');
-  if (m.def.id === D.RAIDERS.leader) gainFeat('raiderBoss');
   // 素材とアイテム（確率で落とす）
   for (const [id, ch] of D.materialTable(D.MONSTERS[m.def.id])) if (Math.random() < ch * (m.boss ? 3 : 1) || world.forceLoot) placeLoot(m.pos.x + (Math.random() - 0.5) * 1.4, m.pos.z + (Math.random() - 0.5) * 1.4, 'mat', id);
   for (const [item, ch] of D.ITEM_DROPS) if (Math.random() < ch || world.forceLoot) placeLoot(m.pos.x + (Math.random() - 0.5) * 1.4, m.pos.z + (Math.random() - 0.5) * 1.4, 'item', item);

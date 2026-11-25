@@ -468,16 +468,16 @@ export const LEVEL = { expToNext: lv => lv + 2, max: 50 };
 export const FEAT_LOG = 30;
 // 功績：exp は手に入る経験値。text の {name} などは game.js で置き換える
 export const FEATS = {
+  // once: true の功績は一生に 1 回だけ（save.featsDone に記録）
   firstKill: { exp: 1, text: '初めて{name}を倒した' },                       // 魔物の種類ごとに 1 回
   firstDescend: { exp: 1, text: '第{cycle}周期で最初に第{depth}層へ進んだ' },  // 周期ごと・深さ（3 層以降）ごとに 1 回
   newDepth: { exp: 1, text: '初めて第{depth}層に到達した' },                  // 生涯で深さごとに 1 回
-  firstRift: { exp: 1, text: '初めて次元の亀裂に入った' },
-  survive: { exp: 1, text: '第{depth}層の閉鎖まで生き延びて帰還した' },        // 第2層より深い所から閉鎖で帰還するたび
-  abyss: { exp: 1, text: '深淵の魔物（{name}）を倒した' },
-  boss: { exp: 2, text: '{name}を倒した' },                                  // 亀裂の主
-  orcHero: { exp: 3, text: 'オークヒーローを倒した' },
-  orcLord: { exp: 5, text: '災厄・オークロードを倒した' },
-  raiderBoss: { exp: 2, text: '略奪者の頭目を倒した' },
+  firstRift: { exp: 1, text: '初めて次元の亀裂に入った', once: true },
+  survive: { exp: 1, text: '第{depth}層の閉鎖まで生き延びて帰還した', once: true },  // 第2層より深い所から閉鎖で帰還（一生に 1 回）
+  abyss: { exp: 1, text: '深淵の魔物（{name}）を倒した', once: true },
+  boss: { exp: 2, text: '{name}を倒した', once: true },                       // 亀裂の主
+  orcHero: { exp: 3, text: 'オークヒーローを倒した', once: true },
+  orcLord: { exp: 5, text: '災厄・オークロードを倒した', once: true },
 };
 
 // ------------------------------------------------------------------ 素材（魔物が落とす。拠点で売る・工房で使う）
@@ -659,6 +659,7 @@ export const NEW_GAME = {
   clears: 0,
   level: 1,           // レベル（功績で経験値がたまると上がる）
   exp: 0,             // 次のレベルまでにたまっている経験値
+  featsDone: {},      // 一生に 1 回だけの功績のうち、もう得たもの { kind: true }
   feats: [],          // 手に入れた功績の記録（新しい順、最大 FEAT_LOG 件）
   cycleDescent: {},   // その周期に、どの深さまで最初に進んだか { cycle: 周期, depths: [3, 4] }
   riftVisited: false, // 次元の亀裂に入ったことがあるか
