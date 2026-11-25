@@ -437,7 +437,14 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
 
   scene.background = new THREE.Color(L.fog);
   scene.fog = new THREE.Fog(L.fog, night ? L.sight * 0.25 : 14, crystalMode ? L.litFog : night ? L.sight : 42);
-  root.add(new THREE.HemisphereLight(L.ambient, 0x10100c, L.ambientIntensity));
+  root.add(new THREE.HemisphereLight(L.ambient, night ? 0x2a2a30 : 0x10100c, L.ambientIntensity));
+  if (night && L.moon) {
+    // 月明かり：開けた土地をうっすら照らす（影は落とさない）
+    const moon = new THREE.DirectionalLight(0xc8d4ff, L.moon);
+    moon.position.set(world.cols * T * 0.3, 80, world.rows * T * 0.2);
+    moon.target.position.set(world.cols * T / 2, 0, world.rows * T / 2);
+    root.add(moon, moon.target);
+  }
   world.vis = null;
   world.glow = null;
   world.crystalPoints = null;
@@ -549,7 +556,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   } else {
     // 夜空：地平線から天頂へのグラデーションと星
     const cx = world.cols * T / 2, cz = world.rows * T / 2;
-    buildSkyDome(root, L.fog, L.zenith ?? 0x0a1030, { x: cx, z: cz }, Math.max(world.cols, world.rows) * T * 0.9 + 60);
+    buildSkyDome(root, L.fog, L.zenith ?? 0x0c1638, { x: cx, z: cz }, Math.max(world.cols, world.rows) * T * 0.9 + 60);
     if (L.stars) buildStarSky(root, rnd);
   }
 

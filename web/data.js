@@ -257,7 +257,7 @@ export const TIME = {
 // next / prev: 下層・上層への門の行き先（prev が 'via' なら、来たエリアへ戻る）
 // regions: 地域ごとの設定 { name: 表示名, monsters: [[魔物 id, 重み, 'rare'?], ...], group: [最少, 最多], safe: 魔物が入れない }
 // theme: 見た目（'crystal' 水晶の洞窟 / 'canyon' 峡谷 / 'dead' 亡者の地 / 'desert' 砂漠 / 'forest' 森 / 'pilgrim' 巡礼者の道 / 既定は石の回廊）
-// lighting.mode: 'crystal'（クリスタルの周りだけ明るい）/ 'night'（夜のように暗く、空に星明かり。sight が見通し m）/ 既定は松明
+// lighting.mode: 'crystal'（クリスタルの周りだけ明るい）/ 'night'（夜。空に星明かり。sight が見通し m、moon が月明かりの強さ）/ 既定は松明
 // isSpecialRift: 特殊な亀裂。timeMode が 'stopped'（中では時間が止まる）か 'surface'（地上と同じ時間が流れる）
 export const TILE_SIZE = 4.0;
 export const WALL_HEIGHT = 3.5;
@@ -307,7 +307,7 @@ export const FLOORS = [
     regions: {
       main: { name: '峡谷', group: [8, 12], monsters: [['giant_wolf', 2], ['blood_wolf', 2], ['wall_mole', 3], ['mole_queen', 0.5], ['moon_bear', 1], ['horned_boar', 2], ['saber_tiger', 1], ['werewolf', 1]] },
     },
-    lighting: { mode: 'night', ambient: 0x8a9ac8, ambientIntensity: 2.0, fog: 0x0a0d18, sight: 24, stars: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0xa8b4d8, ambientIntensity: 2.6, fog: 0x1a2236, sight: 45, moon: 1.4, stars: true, torchColor: 0xffa860 },
   },
   {
     id: 22, depth: 2, area: '南',
@@ -321,7 +321,7 @@ export const FLOORS = [
         ['death_fiend', 1], ['chimera_wolf', 1], ['ghoul_lord', 0.7], ['dullahan', 0.06, 'rare'], ['death_knight', 0.02, 'rare']] },
     },
     banshee: true,   // ときどきバンシーの泣き声が響く
-    lighting: { mode: 'night', ambient: 0x8a9ab8, ambientIntensity: 2.4, fog: 0x0c0e16, sight: 16, stars: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0x9aa4bc, ambientIntensity: 2.6, fog: 0x181c26, sight: 28, moon: 1.1, stars: true, torchColor: 0xffa860 },
   },
   {
     id: 23, depth: 2, area: '西',
@@ -334,7 +334,7 @@ export const FLOORS = [
       main: { name: '砂漠', group: [8, 12], monsters: [['gnome', 3], ['fallen_gnome', 2], ['kobold', 2], ['kobold_shield', 1.5], ['kobold_spear', 1.5],
         ['golem', 0.8], ['stone_soldier', 0.8], ['sandman', 1], ['sandworm', 0.8], ['death_worm', 0.008, 'rare']] },
     },
-    lighting: { mode: 'night', ambient: 0xc8a878, ambientIntensity: 2.0, fog: 0x1a140c, sight: 28, stars: true, torches: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0xd8bc90, ambientIntensity: 2.6, fog: 0x2a2218, sight: 50, moon: 1.4, stars: true, torches: true, torchColor: 0xffa860 },
   },
   {
     id: 24, depth: 2, area: '北',
@@ -349,7 +349,7 @@ export const FLOORS = [
       main: { name: '森', group: [10, 14], monsters: [['goblin', 4], ['goblin_sword', 2], ['goblin_archer', 2]] },
       outer: { name: '森の外周部', group: [8, 12], monsters: [['goblin', 4], ['goblin_sword', 2], ['goblin_archer', 2], ['hobgoblin', 1.2]] },
     },
-    lighting: { mode: 'night', ambient: 0x9ab0d8, ambientIntensity: 2.4, fog: 0x0c1220, sight: 32, stars: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0xb0c4e8, ambientIntensity: 3.0, fog: 0x1a2438, sight: 50, moon: 1.5, stars: true, torchColor: 0xffa860 },
   },
   // ---- 第3層：巡礼者の道（第2層のどのエリアから来ても合流する広い 1 つの階層）
   {
@@ -372,7 +372,7 @@ export const FLOORS = [
       grass_sw: { name: '風の草原', group: [3, 5], monsters: [['fairy', 1], ['root_eater', 1]] },
       gate_n: { name: '北の巡礼門', group: [3, 5], monsters: [['woodman', 1], ['owlbear', 1], ['wraith', 1]] },
     },
-    lighting: { mode: 'night', ambient: 0x9aa8d0, ambientIntensity: 2.2, fog: 0x0c1020, sight: 30, stars: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0xb0bce0, ambientIntensity: 2.8, fog: 0x1a2238, sight: 55, moon: 1.5, stars: true, torchColor: 0xffa860 },
   },
   {
     // 第4層（仮）：詳しい設定はこれから。上層への門は第3層へ

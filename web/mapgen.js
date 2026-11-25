@@ -194,82 +194,155 @@ export function crystalCave(seed) {
 // ====================================================================== 第2層の 4 つのエリア
 // 共通：到着地点 S、その隣に上層（第1層）への門 U、遠くに第3層への門 N（ゴブリンの森は石碑 T）、亀裂の候補 R、魔物の群れ m
 
-// 獣の巣窟：分岐が極めて多い峡谷（迷いやすい）
+// 開けた土地の共通部品 ---------------------------------------------------------------
+// なめらかな乱数の地図（0〜1）。cell マスごとに乱数を置いて補間する（木立・岩場・崖の形に使う）
+function smoothField(rnd, rows, cols, cell) {
+  const gr = Math.ceil(rows / cell) + 2, gc = Math.ceil(cols / cell) + 2;
+  const pts = Array.from({ length: gr }, () => Array.from({ length: gc }, () => rnd()));
+  const sm = t => t * t * (3 - 2 * t);
+  return (r, c) => {
+    const y = r / cell, x = c / cell, yi = Math.floor(y), xi = Math.floor(x), fy = sm(y - yi), fx = sm(x - xi);
+    const a = pts[yi][xi], b = pts[yi][xi + 1], c2 = pts[yi + 1][xi], d = pts[yi + 1][xi + 1];
+    return a + (b - a) * fx + (c2 - a) * fy + (a - b - c2 + d) * fx * fy;
+  };
+}
+// 外周を崖（壁）で囲んだ、開けた土地
+function openLand(rows, cols) {
+  const g = makeGrid(rows, cols, '.');
+  for (let r = 0; r < rows; r++) { g[r][0] = '#'; g[r][cols - 1] = '#'; }
+  for (let c = 0; c < cols; c++) { g[0][c] = '#'; g[rows - 1][c] = '#'; }
+  return g;
+}
+// 外周の崖をでこぼこにする（まっすぐな壁にしない）
+function raggedEdge(g, rnd, depth = 3) {
+  const rows = g.length, cols = g[0].length;
+  const f = smoothField(rnd, rows, cols, 6);
+  for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
+    const d = Math.min(r, c, rows - 1 - r, cols - 1 - c);
+    if (d <= depth && f(r, c) * depth > d - 0.5) g[r][c] = '#';
+  }
+}
+
+// 獣の巣窟：分岐の多い峡谷。幅の広い谷が枝分かれして入り組み、迷いやすい（ただし迷路のような細い通路ではない）
 export function canyon(seed) {
   const rnd = seededRandom(seed);
-  const N = 51;
-  const g = makeGrid(N, N);
-  const node = (r, c) => r > 0 && c > 0 && r < N - 1 && c < N - 1 && r % 2 === 1 && c % 2 === 1;
-  carveMaze(g, [N - 2, 1], node, rnd, 0.06, 0.35);
-  // ところどころの広場（群れのいる場所）
-  const clear = [];
-  for (let i = 0; i < 9; i++) {
-    const r = 5 + Math.floor(rnd() * (N - 10)), c = 5 + Math.floor(rnd() * (N - 10));
-    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) g[r + dr][c + dc] = '.';
-    clear.push([r, c]);
+  const N = 71;
+  // セル・オートマトンで自然な形の谷を作る（壁が多い所は崖、少ない所は谷になる）
+  let g = makeGrid(N, N);
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) g[r][c] = rnd() < 0.47 ? '#' : '.';
+  for (let it = 0; it < 6; it++) {
+    const ng = makeGrid(N, N);
+    for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+      let n = 0;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (g[r + dr][c + dc] === '#') n++;
+      ng[r][c] = n >= 5 ? '#' : '.';
+    }
+    g = ng;
   }
-  return finishArea(g, rnd, [N - 2, 1], { nextFar: true, groups: 7, clear, rifts: 2 });
+  // 谷を少し広げる（1 マスの細い所をなくす）
+  const widened = g.map(row => row.slice());
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+    if (g[r][c] !== '#') continue;
+    const open = DIRS.filter(([dr, dc]) => g[r + dr][c + dc] !== '#').length;
+    if (open >= 3 && rnd() < 0.7) widened[r][c] = '.';
+  }
+  g = widened;
+  // いちばん広くつながった谷だけを残す
+  const seen = makeGrid(N, N, -1);
+  let best = -1, bestSize = 0, id = 0;
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+    if (g[r][c] === '#' || seen[r][c] >= 0) continue;
+    const q = [[r, c]]; seen[r][c] = id;
+    for (let i = 0; i < q.length; i++) for (const [dr, dc] of DIRS) {
+      const nr = q[i][0] + dr, nc = q[i][1] + dc;
+      if (g[nr][nc] !== '#' && seen[nr][nc] < 0) { seen[nr][nc] = id; q.push([nr, nc]); }
+    }
+    if (q.length > bestSize) { bestSize = q.length; best = id; }
+    id++;
+  }
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (g[r][c] !== '#' && seen[r][c] !== best) g[r][c] = '#';
+  // 到着地点：南西の隅にいちばん近い谷のマス
+  let S = null, sd = Infinity;
+  for (let r = 3; r < N - 3; r++) for (let c = 3; c < N - 3; c++) {
+    if (g[r][c] === '#') continue;
+    const d = (N - 1 - r) + c;
+    if (d < sd) { sd = d; S = [r, c]; }
+  }
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) g[S[0] + dr][S[1] + dc] = '.';
+  // 谷底の岩（通り抜けできないが、見通しはさえぎらない）
+  const rock = smoothField(rnd, N, N, 5);
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) if (g[r][c] === '.' && rock(r, c) > 0.72 && rnd() < 0.25) g[r][c] = 'P';
+  return finishArea(g, rnd, S, { nextFar: true, groups: 8, groupGap: 9, rifts: 2 });
 }
 
-// 亡者の地：ぬかるむ黒い大地と石造りの残骸。罠はなく、ひたすら北へ進めば第3層への門がある
+// 亡者の地：ぬかるむ黒い大地と石造建築の残骸が広がる。罠はなく、ひたすら北へ進めば第3層への門がある
 export function deadland(seed) {
   const rnd = seededRandom(seed);
-  const Wd = 25, Ht = 75;
-  const g = makeGrid(Ht, Wd, '.');
-  for (let r = 0; r < Ht; r++) { g[r][0] = '#'; g[r][Wd - 1] = '#'; }
-  for (let c = 0; c < Wd; c++) { g[0][c] = '#'; g[Ht - 1][c] = '#'; }
-  // 石造建築の残骸（壁のかけらと柱）
-  for (let i = 0; i < 60; i++) {
-    const r = 3 + Math.floor(rnd() * (Ht - 8)), c = 2 + Math.floor(rnd() * (Wd - 4));
-    if (Math.abs(c - Wd / 2) < 2) continue;   // 北へまっすぐ進める道を残す
-    if (rnd() < 0.5) g[r][c] = 'P';
-    else { const len = 2 + Math.floor(rnd() * 3), horiz = rnd() < 0.5;
-      for (let k = 0; k < len; k++) { const rr = r + (horiz ? 0 : k), cc = c + (horiz ? k : 0); if (rr < Ht - 1 && cc < Wd - 1 && Math.abs(cc - Wd / 2) >= 2) g[rr][cc] = '#'; } }
+  const Wd = 41, Ht = 95, mid = Math.floor(Wd / 2);
+  const g = openLand(Ht, Wd);
+  raggedEdge(g, rnd, 3);
+  // 石造建築の残骸：崩れた壁の一部と柱（大きな建物の跡のように、ところどころに固まって残る）
+  const ruin = smoothField(rnd, Ht, Wd, 7);
+  for (let r = 4; r < Ht - 4; r++) for (let c = 4; c < Wd - 4; c++) {
+    if (Math.abs(c - mid) < 2) continue;   // 北へまっすぐ進める道を残す
+    const v = ruin(r, c);
+    if (v > 0.7 && rnd() < 0.35) g[r][c] = 'P';
+    else if (v > 0.8 && (r % 5 === 0 || c % 6 === 0) && rnd() < 0.6) g[r][c] = '#';   // 壁の跡（低い）
   }
-  const S = [Ht - 3, Math.floor(Wd / 2)];
-  g[1][Math.floor(Wd / 2)] = 'N';
-  return finishArea(g, rnd, S, { groups: 7, rifts: 2 });
+  const S = [Ht - 4, mid];
+  for (let r = 1; r <= 3; r++) for (let c = mid - 1; c <= mid + 1; c++) g[r][c] = '.';
+  g[2][mid] = 'N';
+  for (let r = Ht - 6; r < Ht - 2; r++) for (let c = mid - 2; c <= mid + 2; c++) g[r][c] = '.';
+  return finishArea(g, rnd, S, { groups: 8, groupGap: 10, rifts: 2 });
 }
 
-// 岩の砂漠：砂と熱い空気、松明に照らされた石造りの残骸
+// 岩の砂漠：見渡す限りの砂と岩。ところどころに岩山（崖）と、松明に照らされた石造りの残骸
 export function desert(seed) {
   const rnd = seededRandom(seed);
-  const N = 57;
-  const g = makeGrid(N, N, '.');
-  for (let i = 0; i < N; i++) { g[0][i] = g[N - 1][i] = g[i][0] = g[i][N - 1] = '#'; }
-  // 岩山（かたまり）
-  for (let i = 0; i < 26; i++) {
-    const r = 3 + Math.floor(rnd() * (N - 6)), c = 3 + Math.floor(rnd() * (N - 6)), rad = 1 + Math.floor(rnd() * 2.5);
-    for (let dr = -rad; dr <= rad; dr++) for (let dc = -rad; dc <= rad; dc++)
-      if (dr * dr + dc * dc <= rad * rad + 0.5 && r + dr > 0 && c + dc > 0 && r + dr < N - 1 && c + dc < N - 1) g[r + dr][c + dc] = '#';
+  const N = 75;
+  const g = openLand(N, N);
+  raggedEdge(g, rnd, 4);
+  // 岩山（大きなかたまりが少しだけ）
+  for (let i = 0; i < 9; i++) {
+    const r = 8 + Math.floor(rnd() * (N - 16)), c = 8 + Math.floor(rnd() * (N - 16)), rad = 2 + rnd() * 2.5;
+    for (let dr = -4; dr <= 4; dr++) for (let dc = -4; dc <= 4; dc++)
+      if (dr * dr + dc * dc <= rad * rad * (0.8 + rnd() * 0.4)) g[r + dr][c + dc] = '#';
   }
-  // 石造りの残骸（柱）
-  for (let i = 0; i < 70; i++) { const r = 2 + Math.floor(rnd() * (N - 4)), c = 2 + Math.floor(rnd() * (N - 4)); if (g[r][c] === '.') g[r][c] = 'P'; }
-  const S = [Math.floor(N / 2), N - 3];   // 第1層の西の門から来るので、東の端に着く
-  g[S[0]][S[1]] = '.'; g[S[0]][S[1] - 1] = '.'; g[S[0] - 1][S[1]] = '.';
-  return finishArea(g, rnd, S, { nextFar: true, groups: 7, rifts: 2 });
+  // 岩と残骸（ひとつずつ置かれた障害物。周りは開けている）
+  const f = smoothField(rnd, N, N, 8);
+  for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) if (g[r][c] === '.' && rnd() < 0.015 + f(r, c) * 0.035) g[r][c] = 'P';
+  const S = [Math.floor(N / 2), N - 6];   // 第1層の西の門から来るので、東の端に着く
+  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) g[S[0] + dr][S[1] + dc] = '.';
+  return finishArea(g, rnd, S, { nextFar: true, groups: 8, groupGap: 10, rifts: 2 });
 }
 
-// ゴブリンの森：星明かりで比較的明るい森。無数の罠。第3層への門は 8 つの石碑のどれか 1 つ（開くと残りはただの石塊になる）
+// ゴブリンの森：星明かりで比較的明るい森。木立と開けた空き地が交互にある。無数の罠。
+// 第3層への門は 8 つの石碑のどれか 1 つ（開くと残りはただの石塊になる）
 export function forest(seed) {
   const rnd = seededRandom(seed);
-  const N = 57;
-  const g = makeGrid(N, N, '.');
-  for (let i = 0; i < N; i++) { g[0][i] = g[N - 1][i] = g[i][0] = g[i][N - 1] = '#'; }
-  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) if (rnd() < 0.2) g[r][c] = 'P';   // 木
-  const S = [N - 3, Math.floor(N / 2)];   // 第1層の北の門から来るので、南の端に着く
-  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) g[S[0] + dr][S[1] + dc] = '.';
-  const res = finishArea(g, rnd, S, { groups: 7, groupGap: 8, rifts: 2, noNext: true });
+  const N = 75;
+  const g = openLand(N, N);
+  raggedEdge(g, rnd, 3);
+  // 木立（木の密度がなめらかに変わる。濃い所は林、薄い所は空き地）
+  const dens = smoothField(rnd, N, N, 7);
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+    if (g[r][c] !== '.') continue;
+    const d = dens(r, c);
+    if (rnd() < (d > 0.6 ? 0.22 : d > 0.4 ? 0.07 : 0.015)) g[r][c] = 'P';
+  }
+  const S = [N - 5, Math.floor(N / 2)];   // 第1層の北の門から来るので、南の端に着く
+  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) g[S[0] + dr][S[1] + dc] = '.';
+  const res = finishArea(g, rnd, S, { groups: 8, groupGap: 10, rifts: 2, noNext: true });
   const G = res.map.map(r => r.split(''));
   // 石碑 8 つ（到着地点から遠く、互いに離す）
-  for (const [r, c] of scatter(G, rnd, 8, 12, (r, c) => Math.abs(r - S[0]) + Math.abs(c - S[1]) > 18 && G[r - 1][c] !== '#')) G[r][c] = 'T';
+  for (const [r, c] of scatter(G, rnd, 8, 14, (r, c) => Math.abs(r - S[0]) + Math.abs(c - S[1]) > 22 && G[r - 1][c] !== '#')) G[r][c] = 'T';
   keepConnected(G, S);
   // 罠（見えない）。到着地点の近くには置かない
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++)
-    if (G[r][c] === '.' && rnd() < 0.035 && Math.abs(r - S[0]) + Math.abs(c - S[1]) > 5) G[r][c] = '^';
+    if (G[r][c] === '.' && rnd() < 0.03 && Math.abs(r - S[0]) + Math.abs(c - S[1]) > 6) G[r][c] = '^';
   // 外周部（ホブゴブリンが出る）
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++)
-    if (res.regions[r][c] && Math.min(r, c, N - 1 - r, N - 1 - c) <= 6) res.regions[r][c] = 'outer';
+    if (res.regions[r][c] && Math.min(r, c, N - 1 - r, N - 1 - c) <= 8) res.regions[r][c] = 'outer';
   res.map = toRows(G);
   return res;
 }
@@ -334,18 +407,18 @@ export function pilgrimRoad(seed) {
   // 南西の端は風の草原（湿地と石像の遺跡のあいだ）
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) if (r > 58 && c < 22) regions[r][c] = 'grass_sw';
   // 地形：フィールドごとに木・岩・残骸を置く
-  const density = { witch: 0.22, hill: 0.05, orc: 0.04, swamp: 0.08, statue: 0.07, road_w: 0.03, plain_nw: 0.04, battle_ne: 0.06, valley_se: 0.06, grass_sw: 0.03, gate_n: 0.04 };
+  const density = { witch: 0.16, hill: 0.03, orc: 0.025, swamp: 0.05, statue: 0.05, road_w: 0.015, plain_nw: 0.02, battle_ne: 0.035, valley_se: 0.035, grass_sw: 0.015, gate_n: 0.025 };
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
     const reg = regions[r][c];
     if (rnd() < density[reg]) g[r][c] = 'P';
   }
-  // 岩山・崖（丘と谷）
-  for (let i = 0; i < 40; i++) {
+  // 岩場（大きな岩がまばらに集まる。壁のかたまりは作らず、見通しのよい開けた土地にする）
+  for (let i = 0; i < 30; i++) {
     const r = 3 + Math.floor(rnd() * (N - 6)), c = 3 + Math.floor(rnd() * (N - 6));
     if (regions[r][c] === 'witch' || Math.hypot(r - C, c - C) < 16) continue;
-    const rad = 1 + Math.floor(rnd() * 2);
-    for (let dr = -rad; dr <= rad; dr++) for (let dc = -rad; dc <= rad; dc++) if (g[r + dr]?.[c + dc] === '.' || g[r + dr]?.[c + dc] === 'P') g[r + dr][c + dc] = '#';
+    for (let k = 0; k < 4; k++) { const rr = r + Math.floor(rnd() * 5) - 2, cc = c + Math.floor(rnd() * 5) - 2; if (g[rr]?.[cc] === '.') g[rr][cc] = 'P'; }
   }
+  raggedEdge(g, rnd, 3);
   // 中心へ向かう 4 本の道（障害物を取り除く）
   for (let k = 1; k < N - 1; k++) for (const [r, c] of [[C, k], [k, C]]) for (const o of [-1, 0, 1]) {
     const rr = r === C ? C + o : r, cc = c === C ? C + o : c;
