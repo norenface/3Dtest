@@ -69,9 +69,43 @@ addEventListener('resize', resize);
 const input = new Input($('#app'));
 
 // ====================================================================== ステータス計算
+const recipeBonus = id => D.RECIPES.find(r => r.id === id)?.bonus ?? 0;
+
+// ====================================================================== 功績・経験値・レベル
+// 功績を上げると経験値が入り、たまるとレベルが上がる（D.FEATS / D.LEVEL）
+function gainFeat(kind, vars = {}) {
+  const f = D.FEATS[kind];
+  if (!f) return;
+  const text = f.text.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
+  save.exp = (save.exp ?? 0) + f.exp;
+  save.feats = [{ text, exp: f.exp, cycle: save.cycle, day: world.time.day }, ...(save.feats ?? [])].slice(0, D.FEAT_LOG);
+  if (world.run) world.run.expGained = (world.run.expGained ?? 0) + f.exp;
+  log(`功績：${text}（経験値 +${f.exp}）`);
+  const p = player.pos.clone(); p.y = 2.4;
+  popup(p, `功績 +${f.exp}`, 'gain');
+  // レベルアップ
+  let up = false;
+  while ((save.level ?? 1) < D.LEVEL.max && save.exp >= D.LEVEL.expToNext(save.level ?? 1)) {
+    save.exp -= D.LEVEL.expToNext(save.level ?? 1);
+    save.level = (save.level ?? 1) + 1;
+    up = true;
+  }
+  if (up) {
+    refreshStats(true);
+    player.hp = player.st.maxHp;
+    burst(new THREE.Vector3(player.pos.x, 1.2, player.pos.z), 0xffe08a, 50, 3, 5);
+    const q = player.pos.clone(); q.y = 2.0;
+    popup(q, `レベル ${save.level}！`, 'crit');
+    log(`レベルが上がった！ Lv ${save.level}（ステータスが伸び、HP が全回復した）`);
+  }
+}
+
 function computeStats() {
   const race = D.RACES[save.race];
   const stats = { ...race.base };
+  // レベル：種族の成長率 × (レベル − 1) だけ伸びる
+  const lv = save.level ?? 1;
+  for (const [k, g] of Object.entries(race.growth ?? {})) stats[k] += Math.floor(g * (lv - 1));
   const passives = [...race.passives];
   let used = 0;
   for (const id of save.absorbed) {
@@ -88,9 +122,10 @@ function computeStats() {
   return {
     race, stats, passives, weapon, armor,
     capacity: race.soulCapacity, used,
-    maxHp: Math.round(F.hpBase + stats.VIT * F.hpPerVIT + armor.hpBonus),
+    maxHp: Math.round(F.hpBase + stats.VIT * F.hpPerVIT + armor.hpBonus + (save.patch ?? 0) * recipeBonus('patch')),
     maxStamina: Math.round(F.staminaBase + stats.VIT * F.staminaPerVIT + stats.AGI * F.staminaPerAGI),
-    attack: stats.STR * F.attackPerSTR + weapon.attackBonus,
+    attack: stats.STR * F.attackPerSTR + weapon.attackBonus + (save.hone ?? 0) * recipeBonus('hone'),
+    level: lv,
     moveSpeed: (F.moveSpeedBase + stats.AGI * F.moveSpeedPerAGI) * mult('', 'moveSpeedMultiplier'),
     meleeMultiplier: mult('', 'meleeDamageMultiplier'),
     damageTakenMultiplier: mult('', 'damageTakenMultiplier') * armor.damageTakenMultiplier,
@@ -104,7 +139,7 @@ const world = {
   floor: null, grid: [], rows: 0, cols: 0,
   root: null, wallMesh: null, pillars: [], pillarGrid: new Map(), torch: null, exit: null,
   regions: null,             // マスごとの地域（生成マップ）
-  traps: new Map(), steles: [], projectiles: [],
+  traps: new Map(), steles: [], projectiles: [], loot: [],
   monsters: [], orbs: [], stones: [],
   time: new TimeManager(),   // ゲーム内の日時（迷宮の中で進む）
   portals: [],               // この階層の門
@@ -418,6 +453,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   world.monsters = [];
   world.orbs = [];
   world.stones = [];
+  world.loot = [];
   world.portals = [];
   world.spawnCells = [];
   world.traps = new Map();
@@ -710,6 +746,7 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     }
     for (const o of restore.orbs) placeOrb(o.id, o.x, o.z);
     for (const [x, z, grade] of restore.stones) placeStone(x, z, grade ?? 9);
+    for (const [x, z, kind, id] of restore.loot ?? []) placeLoot(x, z, kind, id);
   } else {
     for (const sc of world.spawnCells) spawnMonster(sc.id, cellCenter(sc.r, sc.c), world.grid[sc.r][sc.c] === floorDef.bossMonster);
     // 群れ（地域ごとの魔物の表から）
@@ -1255,6 +1292,15 @@ function killMonster(m) {
   world.run.kills++;
   save.kills[m.def.id] = (save.kills[m.def.id] || 0) + 1;
   onFieldKill(m);
+  // 功績
+  if (save.kills[m.def.id] === 1) gainFeat('firstKill', { name: D.MONSTERS[m.def.id].name });
+  if (m.boss) gainFeat('boss', { name: m.def.name });
+  if (m.def.id.startsWith('abyss_')) gainFeat('abyss', { name: m.def.name });
+  if (m.def.id === 'orc_hero') gainFeat('orcHero');
+  if (m.def.id === 'orc_lord') gainFeat('orcLord');
+  // 素材とアイテム（確率で落とす）
+  for (const [id, ch] of D.materialTable(D.MONSTERS[m.def.id])) if (Math.random() < ch * (m.boss ? 3 : 1) || world.forceLoot) placeLoot(m.pos.x + (Math.random() - 0.5) * 1.4, m.pos.z + (Math.random() - 0.5) * 1.4, 'mat', id);
+  for (const [item, ch] of D.ITEM_DROPS) if (Math.random() < ch || world.forceLoot) placeLoot(m.pos.x + (Math.random() - 0.5) * 1.4, m.pos.z + (Math.random() - 0.5) * 1.4, 'item', item);
   burst(new THREE.Vector3(m.pos.x, 0.8, m.pos.z), 0xbfe8ff, 40, 5, 3);
   // 魔石：必ず 1 個（パッシブ「漁り屋」で個数が増える）。等級は魔物の強さで決まる
   const count = 1 + player.st.extraStones;
@@ -1275,6 +1321,33 @@ function placeStone(x, z, grade = 9) {
   s.group.position.set(x, 0, z);
   world.root.add(s.group);
   world.stones.push({ model: s, pos: s.group.position, t: Math.random() * 5, grade });
+}
+
+// 落とし物（素材の袋・回復薬・松明）。近づくと自動で拾う
+const LOOT_LOOK = { mat: 0xb08a5a, potion: 0xe04a4a, torch: 0xffa040 };
+function placeLoot(x, z, kind, id) {
+  const g = new THREE.Group();
+  const color = kind === 'mat' ? LOOT_LOOK.mat : LOOT_LOOK[id] ?? 0xffffff;
+  let body;
+  if (kind === 'mat') { body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.17, 0), flatMat(color)); body.scale.set(1, 0.8, 1); }
+  else if (id === 'potion') { body = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.3, 6), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4 })); }
+  else { body = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.45, 5), flatMat(0x6a4a2a)); const f = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.16, 5), new THREE.MeshBasicMaterial({ color })); f.position.y = 0.28; body.add(f); }
+  body.position.y = 0.25;
+  g.add(body);
+  g.position.set(x, 0, z);
+  world.root.add(g);
+  world.loot.push({ group: g, body, pos: g.position, kind, id, t: Math.random() * 5 });
+}
+function pickLoot(l) {
+  if (l.kind === 'mat') {
+    world.run.mats[l.id] = (world.run.mats[l.id] || 0) + 1;
+    return D.MATERIALS[l.id].name;
+  }
+  const H = D.HUB[l.id];
+  const key = l.id === 'potion' ? 'potions' : 'torches';
+  if (save[key] >= H.max) return null;   // もう持てない
+  save[key]++;
+  return H.name;
 }
 
 function placeOrb(id, x, z) {
@@ -1708,6 +1781,28 @@ function updatePickups(dt) {
       popup(p, `+${s.grade}等級魔石`, 'gain');
     }
   }
+  // 素材・アイテム：近づくと拾う（持てない物はその場に残る）
+  for (let i = world.loot.length - 1; i >= 0; i--) {
+    const l = world.loot[i];
+    l.t += dt;
+    l.body.rotation.y += dt * 1.5;
+    l.body.position.y = 0.25 + Math.sin(l.t * 3) * 0.05;
+    const d = Math.hypot(player.pos.x - l.pos.x, player.pos.z - l.pos.z);
+    // 近づくと吸い寄せられる（持てない物は寄ってこない）
+    const canTake = l.kind === 'mat' || save[l.id === 'potion' ? 'potions' : 'torches'] < D.HUB[l.id].max;
+    if (d < 3 && canTake && !player.dead) {
+      l.pos.x += (player.pos.x - l.pos.x) * Math.min(1, dt * 6);
+      l.pos.z += (player.pos.z - l.pos.z) * Math.min(1, dt * 6);
+    }
+    if (d < 0.8 && canTake && !player.dead && world.state === 'playing') {
+      const name = pickLoot(l);
+      if (!name) continue;
+      l.group.parent?.remove(l.group);
+      world.loot.splice(i, 1);
+      const p = player.pos.clone(); p.y = 2.1;
+      popup(p, `+${name}`, 'gain');
+    }
+  }
   // 精髄オーブ：浮かんで回る
   for (const o of world.orbs) {
     o.t += dt;
@@ -1775,6 +1870,16 @@ function usePortal(p) {
   fadeTransition(() => {
     buildFloor(target, arrive);
     if (p.kind === 'back') world.riftReturn = null;
+    // 功績：初めて到達した階層・その周期で最初に下の層へ進む（3 層以降）・初めての亀裂
+    if (p.kind === 'next' && !target.isSpecialRift) {
+      if (target.depth > save.deepest) gainFeat('newDepth', { depth: target.depth });
+      if (save.cycleDescent?.cycle !== save.cycle) save.cycleDescent = { cycle: save.cycle, depths: [] };
+      if (target.depth >= 3 && !save.cycleDescent.depths.includes(target.depth)) {
+        save.cycleDescent.depths.push(target.depth);
+        gainFeat('firstDescend', { cycle: save.cycle, depth: target.depth });
+      }
+    }
+    if (target.isSpecialRift && !save.riftVisited) { save.riftVisited = true; gainFeat('firstRift'); }
     if (!target.isSpecialRift && target.depth > save.deepest) { save.deepest = target.depth; }
     world.run.deepest = Math.max(world.run.deepest, target.isSpecialRift ? world.run.deepest : target.depth);
     if (target.isSpecialRift) world.run.rift = true;
@@ -2063,6 +2168,7 @@ function updateHUD() {
   updateSkillBar();
   $('#hp-bar i').style.width = (player.hp / st.maxHp * 100) + '%';
   $('#hp-text').textContent = `${Math.ceil(player.hp)} / ${st.maxHp}`;
+  $('#lv-text').textContent = `Lv ${save.level ?? 1}（経験値 ${save.exp ?? 0}/${D.LEVEL.expToNext(save.level ?? 1)}）`;
   $('#st-bar i').style.width = (player.stamina / st.maxStamina * 100) + '%';
   $('#st-text').textContent = `${Math.floor(player.stamina)} / ${st.maxStamina}`;
   const left = world.time.hoursUntilClose(world.floor);
@@ -2188,7 +2294,7 @@ function startRun() {
   const floorDef = floorConfig(1);
   // 迷宮に入る直前の状態を残す（力尽きたらここに戻る）
   Store.savePreRun({ ...save, runInProgress: false });
-  world.run = { floor: floorDef.id, stones: {}, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
+  world.run = { floor: floorDef.id, stones: {}, mats: {}, expGained: 0, kills: 0, absorbed: [], damageDealt: 0, damageTaken: 0, skillsUsed: 0, potionsUsed: 0,
     deepest: 1, rift: false, startDay: save.day, startedAt: performance.now(),
     seed: Math.floor(Math.random() * 2 ** 31) + 1,   // 地形の種（突入ごとに地形が変わる）
     via: null,                                        // 通った第2層のエリア
@@ -2230,6 +2336,7 @@ function runSnapshot() {
       .map(m => ({ id: m.def.id, x: m.pos.x, z: m.pos.z, hx: m.home.x, hz: m.home.z, hp: m.hp, boss: m.boss, rk: m.regionKey ?? null, gid: m.groupId ?? 0, pi: m.packIndex ?? 0, ps: m.packSize ?? 1 })),
     orbs: world.orbs.map(o => ({ id: o.id, x: o.pos.x, z: o.pos.z })),
     stones: world.stones.map(st => [st.pos.x, st.pos.z, st.grade]),
+    loot: world.loot.map(l => [l.pos.x, l.pos.z, l.kind, l.id]),
   };
 }
 function autosave() {
@@ -2442,6 +2549,7 @@ function endRun(reason, source = '') {
     title = '帰還（階層の閉鎖）';
     note = `${world.time.day} 日目（突入から ${Math.floor(world.time.elapsed)} 時間）、${floorDef.name}が閉ざされ、地上へ送還された。持ち帰った魔石をすべて手に入れた。`;
     save.clears++;
+    if (floorDef.depth >= 2 && !floorDef.isSpecialRift) gainFeat('survive', { depth: floorDef.depth });
   }
   if (reason === 'dead') {
     // 迷宮に入る直前に戻る（所持品・装備・精髄・ステータス・日付も出発前の状態）
@@ -2458,6 +2566,10 @@ function endRun(reason, source = '') {
     save.clears++;
   }
   save.stones = mergeStones({ ...save.stones }, kept);
+  // 素材も持ち帰る（力尽きたときは出発前に戻るので、その探索の素材は失われる）
+  const keptMats = reason === 'dead' ? {} : run.mats ?? {};
+  save.mats = { ...(save.mats ?? {}) };
+  for (const [id, n] of Object.entries(keptMats)) save.mats[id] = (save.mats[id] || 0) + n;
   save.runs++;
   // 都市の日付を、迷宮を出た日に合わせる（地上ゲートは次の開放日まで閉じている）。力尽きたときは出発前の日付のまま
   if (reason !== 'dead') {
@@ -2476,6 +2588,8 @@ function endRun(reason, source = '') {
     <div class="kv"><span>迷宮にいた期間</span><span>Day ${run.startDay} → Day ${world.time.day}</span></div>
     <div class="kv"><span>倒した敵</span><span>${run.kills}</span></div>
     <div class="kv"><span>持ち帰った魔石</span><span>${stoneText(kept)}${stoneCount(kept) ? `（${stoneValue(kept)} G 相当）` : ''}</span></div>
+    <div class="kv"><span>持ち帰った素材</span><span>${Object.entries(keptMats).map(([id, n]) => `${D.MATERIALS[id].name}×${n}`).join('・') || 'なし'}</span></div>
+    <div class="kv"><span>レベル / 経験値</span><span>Lv ${save.level ?? 1}（${reason === 'dead' ? 'この探索の経験値は失われた' : `この探索で +${run.expGained ?? 0}`}）</span></div>
     <div class="kv"><span>吸収した精髄</span><span>${run.absorbed.map(id => D.ESSENCES[id].name).join('・') || 'なし'}${reason === 'dead' && run.absorbed.length ? '（出発前に戻ったため失われた）' : ''}</span></div>
     <div class="kv"><span>使ったスキル / 回復薬</span><span>${run.skillsUsed} 回 / ${run.potionsUsed} 個</span></div>
     <div class="btns row">
@@ -2646,6 +2760,8 @@ window.game = {
   get runState() { return Store.loadRunState(); },
   get preRun() { return Store.loadPreRun(); },
   forceDrops(on = true) { world.forceDrops = on; },
+  forceLoot(on = true) { world.forceLoot = on; },
+  gainFeat,
   kill(m) { if (m.state !== 'dead') killMonster(m); },
   spawn(id, x, z, boss = false) { return spawnMonster(id, new THREE.Vector3(x, 0, z), boss); },
   regionKeyAt, regionAt, isSafeCell, touchStele,

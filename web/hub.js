@@ -11,7 +11,9 @@ const STAT_NAMES = { STR: '筋力', VIT: '耐久', AGI: '敏捷', INT: '知力',
 const TABS = [
   ['sell', '換金'],
   ['shop', '商店'],
+  ['craft', '工房'],
   ['essence', '精髄'],
+  ['feats', '功績'],
   ['lore', '古文書'],
 ];
 
@@ -117,12 +119,27 @@ function renderTab(s) {
           <div class="muted">1 個 ${G[g].price} G ／ 合計 ${s.stones[g] * G[g].price} G</div></div>
         <button class="btn" data-act="sellGrade" data-arg="${g}">売る</button>
       </div>`).join('');
+    // 素材
+    const M = D.MATERIALS;
+    const mats = Object.entries(s.mats ?? {}).filter(([, n]) => n > 0);
+    const matRows = mats.map(([id, n]) => `
+      <div class="shop-row" data-test="mat-${id}">
+        <div><div>${M[id].name} × ${n}</div><div class="muted">1 個 ${M[id].price} G ／ 合計 ${n * M[id].price} G</div></div>
+        <button class="btn" data-act="sellMat" data-arg="${id}">売る</button>
+      </div>`).join('');
+    const matValue = mats.reduce((v, [id, n]) => v + n * M[id].price, 0);
     return `
       <p class="muted">迷宮で拾った魔石を買い取ります。等級が高いほど高値（9 等級 ${G[9].price} G 〜 1 等級 ${G[1].price} G）。</p>
       ${rows || '<div class="muted">魔石を持っていない。</div>'}
       <div class="kv"><span>所持している魔石</span><span>${stoneCount(s.stones)} 個（${stoneValue(s.stones)} G）</span></div>
       <div class="btns row">
-        <button class="btn primary" data-act="sellAll" ${stoneCount(s.stones) ? '' : 'disabled'}>すべて売る</button>
+        <button class="btn primary" data-act="sellAll" ${stoneCount(s.stones) ? '' : 'disabled'}>魔石をすべて売る</button>
+      </div>
+      <h3 style="margin:14px 0 4px">素材</h3>
+      <p class="muted">魔物が落とした素材も買い取ります（工房で使うこともできる）。</p>
+      ${matRows || '<div class="muted">素材を持っていない。</div>'}
+      <div class="btns row">
+        <button class="btn" data-act="sellAllMats" ${matValue ? '' : 'disabled'}>素材をすべて売る（${matValue} G）</button>
       </div>`;
   }
   if (tab === 'shop') {
@@ -148,6 +165,36 @@ function renderTab(s) {
       ${H.returnScroll.inShop ? row(`${H.returnScroll.name}（所持 ${s.returnScrolls}/${H.returnScroll.max}）`, H.returnScroll.description, H.returnScroll.price, 'buyReturnScroll',
         s.gold >= H.returnScroll.price && s.returnScrolls < H.returnScroll.max) : ''}
       ${row(`${H.oblivion.name}（所持 ${s.oblivion}）`, H.oblivion.description + '「精髄」タブで使う。', H.oblivion.price, 'buyOblivion', s.gold >= H.oblivion.price)}`;
+  }
+  if (tab === 'craft') {
+    const M = D.MATERIALS;
+    const rows = D.RECIPES.map(rc => {
+      const have = Object.entries(rc.needs).map(([id, n]) => `${M[id].name} ${s.mats?.[id] ?? 0}/${n}`).join('・');
+      const enough = Object.entries(rc.needs).every(([id, n]) => (s.mats?.[id] ?? 0) >= n);
+      const H = D.HUB;
+      const full = rc.makes === 'potion' ? s.potions >= H.potion.max : rc.makes === 'torch' ? s.torches >= H.torch.max : (s[rc.makes] ?? 0) >= (rc.max ?? Infinity);
+      const count = rc.max ? `（${s[rc.makes] ?? 0}/${rc.max} 回）` : rc.makes === 'potion' ? `（所持 ${s.potions}/${H.potion.max}）` : `（所持 ${s.torches}/${H.torch.max}）`;
+      return `
+      <div class="shop-row" data-test="recipe-${rc.id}">
+        <div><div>${rc.name}${count}</div><div class="muted">${rc.desc} 必要：${have}</div></div>
+        <button class="btn ${enough && !full ? 'primary' : ''}" data-act="craft" data-arg="${rc.id}" ${enough && !full ? '' : 'disabled'}>${full ? '最大' : '作る'}</button>
+      </div>`;
+    }).join('');
+    return `<p class="muted">迷宮で拾った素材から、道具を作ったり装備を鍛えたりする。</p>${rows}`;
+  }
+  if (tab === 'feats') {
+    const st = ctx.computeStats();
+    const need = D.LEVEL.expToNext(s.level ?? 1);
+    const feats = (s.feats ?? []).map(f => `<div class="kv"><span>${f.text}</span><span>+${f.exp}（第${f.cycle}周期 Day ${f.day}）</span></div>`).join('');
+    return `
+      <div class="kv"><span>レベル</span><span><b>Lv ${s.level ?? 1}</b></span></div>
+      <div class="kv"><span>次のレベルまで</span><span>経験値 ${s.exp ?? 0} / ${need}</span></div>
+      <div class="expbar"><i style="width:${Math.min(100, (s.exp ?? 0) / need * 100)}%"></i></div>
+      <p class="muted">功績を上げると経験値がたまり、レベルが上がる。レベルが上がるとステータスが伸びる（${st.race.name}は筋力・耐久がよく伸びる）。
+        功績：初めて倒した種類の魔物 +1、その周期で最初に下の層（3 層以降）へ進む +1、初めて到達した階層 +1、初めての次元の亀裂 +1、
+        第2層より深い所で閉鎖まで生き延びて帰還 +1、深淵の魔物 +1、亀裂の主 +2、オークヒーロー +3、オークロード +5。</p>
+      <h3 style="margin:10px 0 4px">手に入れた功績（新しい順）</h3>
+      ${feats || '<div class="muted">まだない。</div>'}`;
   }
   if (tab === 'essence') {
     const st = ctx.computeStats();
@@ -225,6 +272,31 @@ function act(name, arg) {
       }
       s.gold += gold;
       note = `魔石 ${n} 個を ${gold} ゴールドで売った。`;
+      break;
+    }
+    case 'sellMat': {
+      const n = s.mats?.[arg] ?? 0;
+      const gold = n * D.MATERIALS[arg].price;
+      s.gold += gold; delete s.mats[arg];
+      note = `${D.MATERIALS[arg].name}を ${n} 個、${gold} ゴールドで売った。`;
+      break;
+    }
+    case 'sellAllMats': {
+      let n = 0, gold = 0;
+      for (const [id, c] of Object.entries(s.mats ?? {})) { n += c; gold += c * D.MATERIALS[id].price; }
+      s.gold += gold; s.mats = {};
+      note = `素材を ${n} 個、${gold} ゴールドで売った。`;
+      break;
+    }
+    case 'craft': {
+      const rc = D.RECIPES.find(r => r.id === arg);
+      if (!rc || !Object.entries(rc.needs).every(([id, n]) => (s.mats?.[id] ?? 0) >= n)) break;
+      const H = D.HUB;
+      if (rc.makes === 'potion') { if (s.potions >= H.potion.max) break; s.potions++; }
+      else if (rc.makes === 'torch') { if (s.torches >= H.torch.max) break; s.torches++; }
+      else { if ((s[rc.makes] ?? 0) >= rc.max) break; s[rc.makes] = (s[rc.makes] ?? 0) + 1; }
+      for (const [id, n] of Object.entries(rc.needs)) { s.mats[id] -= n; if (s.mats[id] <= 0) delete s.mats[id]; }
+      note = `${rc.name}：できあがった。`;
       break;
     }
     case 'buyPotion':

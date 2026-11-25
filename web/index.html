@@ -37,6 +37,9 @@
   #close-info { font-size: 12px; color: var(--muted); }
   #close-info.warn { color: var(--danger); font-weight: 700; animation: pulse 1s infinite; }
   #field-info { font-size: 12px; color: #cfe0ff; }
+  .lv { color: #ffe08a; margin-left: 6px; font-size: 12px; }
+  .expbar { height: 6px; background: rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; margin: 4px 0 10px; }
+  .expbar i { display: block; height: 100%; background: #ffe08a; }
   details.debug { margin-top: 12px; border: 1px dashed rgba(255,200,80,.5); border-radius: 8px; padding: 6px 10px; }
   details.debug summary { cursor: pointer; color: #ffd27a; font-size: 13px; }
   details.debug .btn.small { padding: 6px 10px; font-size: 12px; }
@@ -194,7 +197,7 @@
   <div id="hud" class="hidden">
     <div class="top">
       <div class="bars">
-        <div class="bar-label"><span>HP</span><span id="hp-text">0 / 0</span></div>
+        <div class="bar-label"><span>HP <b id="lv-text" class="lv">Lv 1</b></span><span id="hp-text">0 / 0</span></div>
         <div class="bar" id="hp-bar"><i></i></div>
         <div class="bar-label"><span>スタミナ</span><span id="st-text"></span></div>
         <div class="bar" id="st-bar"><i></i></div>

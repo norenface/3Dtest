@@ -451,6 +451,86 @@ export const FLOORS = [
 ];
 export const RIFT_FLOOR_ID = 101;
 
+// ------------------------------------------------------------------ レベルと功績
+// 功績を上げると経験値が入り、次のレベルに必要な量（expToNext）だけたまるとレベルが上がる。
+// レベルが上がると、種族の成長率（RACES[].growth）× (レベル − 1) だけステータスが伸びる
+export const LEVEL = { expToNext: lv => lv + 2, max: 50 };
+export const FEAT_LOG = 30;
+// 功績：exp は手に入る経験値。text の {name} などは game.js で置き換える
+export const FEATS = {
+  firstKill: { exp: 1, text: '初めて{name}を倒した' },                       // 魔物の種類ごとに 1 回
+  firstDescend: { exp: 1, text: '第{cycle}周期で最初に第{depth}層へ進んだ' },  // 周期ごと・深さ（3 層以降）ごとに 1 回
+  newDepth: { exp: 1, text: '初めて第{depth}層に到達した' },                  // 生涯で深さごとに 1 回
+  firstRift: { exp: 1, text: '初めて次元の亀裂に入った' },
+  survive: { exp: 1, text: '第{depth}層の閉鎖まで生き延びて帰還した' },        // 第2層より深い所から閉鎖で帰還するたび
+  abyss: { exp: 1, text: '深淵の魔物（{name}）を倒した' },
+  boss: { exp: 2, text: '{name}を倒した' },                                  // 亀裂の主
+  orcHero: { exp: 3, text: 'オークヒーローを倒した' },
+  orcLord: { exp: 5, text: '災厄・オークロードを倒した' },
+};
+
+// ------------------------------------------------------------------ 素材（魔物が落とす。拠点で売る・工房で使う）
+export const MATERIALS = {
+  crude_trinket: { name: '粗末な装身具', price: 6 },
+  rusty_blade: { name: '錆びた刃物', price: 8 },
+  beast_hide: { name: '獣の毛皮', price: 8 },
+  beast_fang: { name: '獣の牙', price: 10 },
+  animal_fat: { name: '獣脂', price: 5 },
+  fine_hide: { name: '上質な毛皮', price: 28 },
+  great_fang: { name: '大牙', price: 70 },
+  bone_shard: { name: '骨片', price: 6 },
+  cursed_cloth: { name: '呪われた布切れ', price: 24 },
+  glow_moss: { name: '光苔', price: 9 },
+  ore_chunk: { name: '鉱石のかけら', price: 12 },
+  stone_core: { name: '石の核', price: 32 },
+  sand_crystal: { name: '砂の結晶', price: 26 },
+  shell_plate: { name: '甲殻', price: 36 },
+  spirit_dust: { name: '霊の粉', price: 16 },
+  spirit_shard: { name: '霊のかけら', price: 40 },
+  tree_sap: { name: '樹液', price: 14 },
+  hard_bark: { name: '硬い樹皮', price: 12 },
+  orc_trophy: { name: 'オークの戦利品', price: 42 },
+};
+// 魔物ごとの素材の種類（ないものは体の型から決める）
+const MAT_KIND = {
+  goblin: 'goblin', goblin_sword: 'goblin', goblin_archer: 'goblin', hobgoblin: 'goblin', abyss_goblin: 'goblin', kobold: 'gnome', kobold_shield: 'gnome', kobold_spear: 'gnome',
+  gnome: 'gnome', fallen_gnome: 'gnome', abyss_gnome: 'gnome',
+  ghoul: 'undead', elder_ghoul: 'undead', ghoul_lord: 'undead', abyss_ghoul: 'undead', skeleton_warrior: 'undead', skeleton_archer: 'undead', skeleton_mage: 'undead',
+  death_fiend: 'undead', dullahan: 'undead', death_knight: 'undead', homunculus: 'undead',
+  sandman: 'sand', sandworm: 'worm', death_worm: 'worm', woodman: 'wood', snake_tree: 'wood', cannibal_tree: 'wood', dryad: 'wood',
+  orc_warrior: 'orc', orc_archer: 'orc', orc_shaman: 'orc', orc_great: 'orc', orc_hero: 'orc', orc_lord: 'orc', half_troll: 'orc', werewolf: 'beast',
+};
+const MAT_BY_KIND = {
+  goblin: [['crude_trinket', 0.3], ['rusty_blade', 0.15]],
+  gnome: [['ore_chunk', 0.25], ['glow_moss', 0.25]],
+  undead: [['bone_shard', 0.3], ['cursed_cloth', 0.08, 8]],
+  beast: [['beast_hide', 0.3], ['beast_fang', 0.18], ['animal_fat', 0.3], ['fine_hide', 0.12, 8], ['great_fang', 0.1, 7]],
+  stone: [['stone_core', 0.2], ['ore_chunk', 0.25]],
+  sand: [['sand_crystal', 0.25], ['stone_core', 0.1]],
+  worm: [['shell_plate', 0.25], ['sand_crystal', 0.15]],
+  spirit: [['spirit_dust', 0.3], ['spirit_shard', 0.1, 8]],
+  wood: [['tree_sap', 0.3], ['hard_bark', 0.25]],
+  orc: [['orc_trophy', 0.2], ['rusty_blade', 0.2], ['animal_fat', 0.15]],
+};
+const KIND_BY_MODEL = { beast: 'beast', golem: 'stone', spirit: 'spirit', worm: 'worm', tree: 'wood', humanoid: 'goblin' };
+// その魔物が落とす素材の表 [[素材 ID, 確率], ...]（等級の条件 [, , 最低等級] を満たすものだけ）
+export function materialTable(def) {
+  const kind = MAT_KIND[def.id] ?? KIND_BY_MODEL[def.model] ?? 'goblin';
+  return MAT_BY_KIND[kind].filter(([, , g]) => g === undefined || def.grade <= g).map(([id, ch]) => [id, ch]);
+}
+// アイテムの落とし物（どの魔物も、この確率で落とす。持てる数を超えるときは拾えない）
+export const ITEM_DROPS = [['potion', 0.04], ['torch', 0.04]];
+
+// ------------------------------------------------------------------ 工房（素材から作る）
+// makes: 作れる物（potion 回復薬 / torch 松明 / hone 武器を研ぐ / patch 防具を補強）、needs: 必要な素材、max: 何回まで（強化）
+export const RECIPES = [
+  { id: 'potion', name: '回復薬', makes: 'potion', needs: { glow_moss: 2 }, desc: '光苔をすりつぶして回復薬を作る。' },
+  { id: 'torch', name: '松明', makes: 'torch', needs: { animal_fat: 2 }, desc: '獣脂を布に染み込ませて松明を作る。' },
+  { id: 'potion2', name: '回復薬（樹液）', makes: 'potion', needs: { tree_sap: 2 }, desc: '樹液を煮詰めて回復薬を作る。' },
+  { id: 'hone', name: '武器を研ぐ', makes: 'hone', needs: { ore_chunk: 3, rusty_blade: 2 }, max: 5, bonus: 2, desc: '攻撃力 +2（5 回まで）。' },
+  { id: 'patch', name: '防具を補強する', makes: 'patch', needs: { beast_hide: 3, bone_shard: 2 }, max: 5, bonus: 6, desc: '最大 HP +6（5 回まで）。' },
+];
+
 // デバッグ用の機能（メニューに「デバッグ」の欄を出す：松明を常に灯す・無敵・魔物を全滅・時間を進める・各階層へワープ）。
 // 配布するときは menu: false にする
 export const DEBUG = { menu: true };
@@ -548,4 +628,12 @@ export const NEW_GAME = {
   runInProgress: false, // 探索中か（探索中にアプリが終了した場合、次の起動で続きから再開する）
   runs: 0,
   clears: 0,
+  level: 1,           // レベル（功績で経験値がたまると上がる）
+  exp: 0,             // 次のレベルまでにたまっている経験値
+  feats: [],          // 手に入れた功績の記録（新しい順、最大 FEAT_LOG 件）
+  cycleDescent: {},   // その周期に、どの深さまで最初に進んだか { cycle: 周期, depths: [3, 4] }
+  riftVisited: false, // 次元の亀裂に入ったことがあるか
+  mats: {},           // 素材 { 素材 ID: 個数 }
+  hone: 0,            // 工房で武器を研いだ回数
+  patch: 0,           // 工房で防具を補強した回数
 };
