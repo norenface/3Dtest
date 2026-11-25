@@ -1287,7 +1287,7 @@ function dropEssence(id, pos) {
 }
 
 function hurtPlayer(dmg, fromX, fromZ) {
-  if (player.invuln > 0 || player.dead) return;
+  if (player.invuln > 0 || player.dead || world.debugGod) return;   // debugGod：デバッグの無敵
   const guard = player.guardTimer > 0 ? player.guardMultiplier : 1;
   dmg = Math.max(1, Math.round(dmg * player.st.damageTakenMultiplier * guard));
   if (guard < 1) burst(new THREE.Vector3(player.pos.x, 1.2, player.pos.z), 0xffb347, 12, 3, 1);
@@ -1965,6 +1965,7 @@ function camp() {
 function updateTorchItem(dt, dark) {
   const run = world.run;
   if (!run || world.state !== 'playing' || !dark) return false;
+  if (world.debugTorch) return true;   // デバッグ：松明を減らさずに灯し続ける
   const H = D.HUB.torch;
   run.torchLeft ??= 0;
   if (run.torchLeft <= 0 && save.torches > 0) {
@@ -1977,7 +1978,7 @@ function updateTorchItem(dt, dark) {
   if (run.torchLeft <= 0) { run.torchLeft = 0; log(save.torches > 0 ? `${H.name}が燃え尽きた。` : `${H.name}が燃え尽きた。もう松明がない……。`); }
   return run.torchLeft > 0;
 }
-function torchLit() { return !!(world.inDark && (world.run?.torchLeft ?? 0) > 0); }
+function torchLit() { return !!(world.inDark && (world.debugTorch || (world.run?.torchLeft ?? 0) > 0)); }
 
 function updateCamera(dt) {
   // 水晶の迷宮：いる場所の明るさで見通しが変わる（暗黒地帯では数 m 先しか見えない）
@@ -2069,7 +2070,7 @@ function updateHUD() {
   const eye = runFlags(world.floor.id).witchEye ?? 0;
   const eyeHTML = world.floor.id === D.FLOOR.F3 && eye > 0 ? ` ／ <span class="eye ${eye >= D.WITCH_EYE.max ? 'max' : ''}">魔女の目 ${eye}/${D.WITCH_EYE.max}</span>` : '';
   const fi = $('#field-info');
-  const torchInfo = world.inDark ? (torchLit() ? ` ／ 松明 残り ${Math.ceil(world.run.torchLeft)} 時間（予備 ${save.torches} 本）` : ' ／ 松明なし') : '';
+  const torchInfo = world.inDark ? (world.debugTorch ? ' ／ 松明（デバッグで常に灯っている）' : torchLit() ? ` ／ 松明 残り ${Math.ceil(world.run.torchLeft)} 時間（予備 ${save.torches} 本）` : ' ／ 松明なし') : '';
   const html = (world.inDark ? '<span class="eye">暗黒地帯</span>' + torchInfo : (reg?.name ?? '')) + eyeHTML;
   if (fi.innerHTML !== html) fi.innerHTML = html;
   const nStones = stoneCount(world.run.stones);
@@ -2280,11 +2281,10 @@ function openAbsorb(orb) {
     <div class="kv"><span>能力補正</span><span>${Object.entries(e.statBonus).map(([k, v]) => `${STAT_NAMES[k]} <span style="color:var(--st)">+${v}</span>`).join('　')}</span></div>
     <div class="kv"><span>パッシブ：${passive.name}</span><span class="muted">${passive.description}</span></div>
     <div class="kv"><span>スキル：${active.name}</span><span class="muted">${active.description}（再使用 ${active.cooldown} 秒）</span></div>
-    <div class="warn-text">${reason || '一度吸収した精髄は、原則として取り除けない。'}</div>
+    <div class="warn-text">${reason ? reason + 'この精髄は飲めない。' : '飲むと精髄を吸収する。一度吸収した精髄は、原則として取り除けない。'}</div>
     <div class="btns row">
-      <button class="btn primary" id="btn-absorb" ${owned || !fits ? 'disabled' : ''}>吸収する</button>
-      <button class="btn" id="btn-crush">砕いて魔石にする</button>
-      <button class="btn" id="btn-leave">そのままにする</button>
+      <button class="btn primary" id="btn-absorb" ${owned || !fits ? 'disabled' : ''}>飲む（吸収する）</button>
+      <button class="btn" id="btn-leave">立ち去る</button>
     </div>`;
   show('#absorb-screen');
   $('#btn-absorb').onclick = () => {
@@ -2298,18 +2298,10 @@ function openAbsorb(orb) {
     removeOrb(orb);
     autosave();
     burst(new THREE.Vector3(player.pos.x, 1.2, player.pos.z), e.color, 60, 3, 5);
-    log(`${e.name}を吸収した！`);
+    log(`${e.name}を飲み、吸収した！`);
     closeModal();
   };
-  $('#btn-crush').onclick = () => {
-    // 精髄と同じ等級（rank）の魔石 1 個になる
-    const g = e.rank;
-    addStone(world.run.stones, g);
-    removeOrb(orb);
-    burst(new THREE.Vector3(orb.pos.x, 1.0, orb.pos.z), D.STONE_GRADES[g].color, 30, 3, 3);
-    log(`${e.name}を砕いた。${g}等級の魔石を手に入れた`);
-    closeModal();
-  };
+  // 精髄は飲む（吸収する）か、立ち去る（その場に残す）しかできない
   $('#btn-leave').onclick = closeModal;
 }
 
@@ -2341,12 +2333,73 @@ function openMenu() {
       <button class="btn" id="btn-menu-quality">画質：${settings.quality === 'high' ? '高' : '低'}（切り替え）</button>
       <button class="btn" id="btn-return" ${save.returnScrolls > 0 && !enemiesNearby() ? '' : 'disabled'}>${D.HUB.returnScroll.name}を読んで地上へ帰還する（所持 ${save.returnScrolls}）${save.returnScrolls > 0 && enemiesNearby() ? ' — 近くに魔物がいる' : ''}</button>
     </div>
-    <div class="muted" style="margin-top:8px;font-size:13px">迷宮から出られるのは、この層が閉ざされたとき・力尽きたとき（出発前に戻る）・帰還の巻物などの特殊な効果を受けたときだけ。</div>`;
+    <div class="muted" style="margin-top:8px;font-size:13px">迷宮から出られるのは、この層が閉ざされたとき・力尽きたとき（出発前に戻る）・帰還の巻物などの特殊な効果を受けたときだけ。</div>
+    ${D.DEBUG.menu ? debugMenuHTML() : ''}`;
   show('#menu-screen');
+  if (D.DEBUG.menu) bindDebugMenu();
   $('#btn-resume').onclick = closeModal;
   $('#btn-camp').onclick = camp;
   $('#btn-menu-quality').onclick = () => { toggleQuality(); openMenu(); };
   $('#btn-return').onclick = () => useReturnScroll();
+}
+
+// ====================================================================== デバッグ用の機能（data.js の DEBUG.menu で表示を切り替える）
+const DEBUG_WARPS = [[1, '第1層'], [21, '第2層 獣の巣窟'], [22, '第2層 亡者の地'], [23, '第2層 岩の砂漠'], [24, '第2層 ゴブリンの森'],
+  [3, '第3層'], [4, '第4層'], [D.RIFT_FLOOR_ID, '次元の亀裂']];
+function debugMenuHTML() {
+  return `
+    <details class="debug" data-test="debug" ${world.debugOpen ? 'open' : ''}>
+      <summary>デバッグ（開発用）</summary>
+      <div class="btns row">
+        <button class="btn small" id="dbg-torch">松明：${world.debugTorch ? 'ON' : 'OFF'}</button>
+        <button class="btn small" id="dbg-god">無敵：${world.debugGod ? 'ON' : 'OFF'}</button>
+        <button class="btn small" id="dbg-kill">周りの魔物を全滅</button>
+        <button class="btn small" id="dbg-day">時間を 1 日進める</button>
+        <button class="btn small" id="dbg-heal">HP・スタミナ全回復</button>
+      </div>
+      <div class="muted" style="margin:6px 0 2px">ワープ</div>
+      <div class="btns row">${DEBUG_WARPS.map(([id, name]) => `<button class="btn small" data-warp="${id}">${name}</button>`).join('')}</div>
+    </details>`;
+}
+function bindDebugMenu() {
+  const det = $('#menu-card details.debug');
+  det.ontoggle = () => { world.debugOpen = det.open; };
+  $('#dbg-torch').onclick = () => { world.debugTorch = !world.debugTorch; openMenu(); };
+  $('#dbg-god').onclick = () => { world.debugGod = !world.debugGod; openMenu(); };
+  $('#dbg-kill').onclick = () => {
+    let n = 0;
+    for (const m of world.monsters) if (m.state !== 'dead' && m.pos.distanceTo(player.pos) < 40) { killMonster(m); n++; }
+    log(`（デバッグ）周りの魔物 ${n} 体を倒した`);
+    openMenu();
+  };
+  $('#dbg-day').onclick = () => {
+    world.time.hours += 24;
+    log(`（デバッグ）時間を 1 日進めた：${world.time.label()}`);
+    closeModal();
+  };
+  $('#dbg-heal').onclick = () => { player.hp = player.st.maxHp; player.stamina = player.st.maxStamina; openMenu(); };
+  document.querySelectorAll('#menu-card [data-warp]').forEach(b => b.onclick = () => debugWarp(Number(b.dataset.warp)));
+}
+// 指定した階層へワープする（第3層は通った第2層のエリアの方角から着く。なければ亡者の地から来た扱い）
+function debugWarp(id) {
+  const target = floorConfig(id);
+  const from = world.floor;
+  closeModal();
+  let arrive = 'fromAbove';
+  if (id === 1) arrive = 'start';
+  if (target.isSpecialRift) world.riftReturn = from.isSpecialRift ? (world.riftReturn ?? 22) : from.id;
+  if (id === D.FLOOR.F3) { world.run.via ??= from.depth === 2 && !from.isSpecialRift ? from.id : 22; world.arriveFrom = world.run.via; }
+  else world.arriveFrom = from.id;
+  fadeTransition(() => {
+    buildFloor(target, arrive);
+    if (!target.isSpecialRift && target.depth > save.deepest) save.deepest = target.depth;
+    if (!target.isSpecialRift) world.run.deepest = Math.max(world.run.deepest, target.depth);
+    $('#floor-name').textContent = target.name;
+    applyQuality();
+    autosave();
+    log(`（デバッグ）${target.name}へワープした`);
+    if (checkFloorClosure(world.time.elapsed, target.id)) log('この層はすでに閉鎖時間を過ぎている（すぐに送還される）');
+  });
 }
 
 // 特殊な効果で地上へ帰還する。帰還の魔法などを追加するときも returnToSurface(名前) を呼ぶ
@@ -2584,6 +2637,7 @@ window.game = {
   camp,
   autosave,
   useReturnScroll,
+  debugWarp,
   get runState() { return Store.loadRunState(); },
   get preRun() { return Store.loadPreRun(); },
   forceDrops(on = true) { world.forceDrops = on; },
