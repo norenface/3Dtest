@@ -272,7 +272,7 @@ export function canyon(seed) {
   // 谷底の岩（通り抜けできないが、見通しはさえぎらない）
   const rock = smoothField(rnd, N, N, 5);
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) if (g[r][c] === '.' && rock(r, c) > 0.72 && rnd() < 0.25) g[r][c] = 'P';
-  return finishArea(g, rnd, S, { nextFar: true, groups: 8, groupGap: 9, rifts: 2 });
+  return finishArea(g, rnd, S, { nextFar: true, groups: 24, groupGap: 6, rifts: 2 });
 }
 
 // 亡者の地：ぬかるむ黒い大地と石造建築の残骸が広がる。罠はなく、ひたすら北へ進めば第3層への門がある
@@ -293,7 +293,7 @@ export function deadland(seed) {
   for (let r = 1; r <= 3; r++) for (let c = mid - 1; c <= mid + 1; c++) g[r][c] = '.';
   g[2][mid] = 'N';
   for (let r = Ht - 6; r < Ht - 2; r++) for (let c = mid - 2; c <= mid + 2; c++) g[r][c] = '.';
-  return finishArea(g, rnd, S, { groups: 8, groupGap: 10, rifts: 2 });
+  return finishArea(g, rnd, S, { groups: 24, groupGap: 6, rifts: 2 });
 }
 
 // 岩の砂漠：見渡す限りの砂と岩。ところどころに岩山（崖）と、松明に照らされた石造りの残骸
@@ -313,7 +313,7 @@ export function desert(seed) {
   for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) if (g[r][c] === '.' && rnd() < 0.015 + f(r, c) * 0.035) g[r][c] = 'P';
   const S = [Math.floor(N / 2), N - 6];   // 第1層の西の門から来るので、東の端に着く
   for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) g[S[0] + dr][S[1] + dc] = '.';
-  return finishArea(g, rnd, S, { nextFar: true, groups: 8, groupGap: 10, rifts: 2 });
+  return finishArea(g, rnd, S, { nextFar: true, groups: 26, groupGap: 6, rifts: 2 });
 }
 
 // ゴブリンの森：星明かりで比較的明るい森。木立と開けた空き地が交互にある。無数の罠。
@@ -332,7 +332,7 @@ export function forest(seed) {
   }
   const S = [N - 5, Math.floor(N / 2)];   // 第1層の北の門から来るので、南の端に着く
   for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) g[S[0] + dr][S[1] + dc] = '.';
-  const res = finishArea(g, rnd, S, { groups: 8, groupGap: 10, rifts: 2, noNext: true });
+  const res = finishArea(g, rnd, S, { groups: 26, groupGap: 6, rifts: 2, noNext: true });
   const G = res.map.map(r => r.split(''));
   // 石碑 8 つ（到着地点から遠く、互いに離す）
   for (const [r, c] of scatter(G, rnd, 8, 14, (r, c) => Math.abs(r - S[0]) + Math.abs(c - S[1]) > 22 && G[r - 1][c] !== '#')) G[r][c] = 'T';

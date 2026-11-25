@@ -333,7 +333,7 @@ const THEMES = {
   stone: { floor: 0x57534c, wall: 0x4a4740, cap: 0x77705f, prop: 'pillar', tex: { floor: 'flagstone', wall: 'bricks', ceil: 'rock' } },
   crystal: { floor: 0x2a4f8c, wall: 0x0e1528, cap: 0x0c1426, prop: 'pillar', rough: 0.35, tex: { floor: 'rock', wall: 'crystalRock', ceil: 'crystalRock' } },
   canyon: { floor: 0x5a4636, wall: 0x7a5440, cap: 0x8a6448, prop: 'boulder', wallH: 9, rough: 0.6, tex: { floor: 'dirt', wall: 'strata' } },
-  dead: { floor: 0x3e3832, wall: 0x5a5854, cap: 0x6a6864, prop: 'ruin', wallH: 3, tex: { floor: 'mud', wall: 'bricks' }, floorRough: 0.6 },
+  dead: { floor: 0x5a544c, wall: 0x6a6864, cap: 0x7a7874, prop: 'ruin', wallH: 3, tex: { floor: 'mud', wall: 'bricks' }, floorRough: 0.6 },
   desert: { floor: 0xb89660, wall: 0x9a7650, cap: 0xa88458, prop: 'ruin', wallH: 4.5, rough: 0.45, tex: { floor: 'sand', wall: 'rock' } },
   forest: { floor: 0x2c4628, wall: 0x4a5a3a, cap: 0x56663f, prop: 'tree', wallH: 4, rough: 0.4, tex: { floor: 'grass', wall: 'rock' } },
   pilgrim: { floor: 0x46562e, wall: 0x6a6a60, cap: 0x7a7a6e, prop: 'tree', wallH: 4, rough: 0.4, texBoost: 1.5, tex: { floor: 'grass', wall: 'rock' } },
@@ -716,7 +716,12 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
     for (const [r, c] of markers) {
       const region = floorDef.regions[world.regions[r][c]];
       if (!region?.monsters?.length) continue;
-      const [lo, hi] = region.group ?? [1, 1];
+      // sizes があれば、集団・複数・単体を割合で選ぶ
+      let [lo, hi] = region.group ?? [1, 1];
+      if (region.sizes) {
+        let x = Math.random() * region.sizes.reduce((s, [, w]) => s + w, 0);
+        for (const [range, w] of region.sizes) { x -= w; if (x <= 0) { [lo, hi] = range; break; } }
+      }
       spawnGroup(region, r, c, lo + Math.floor(Math.random() * (hi - lo + 1)));
     }
     // 深淵の侵食（第1層の特殊な条件）

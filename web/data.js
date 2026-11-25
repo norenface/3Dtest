@@ -256,6 +256,7 @@ export const TIME = {
 // closeHours: 突入（0 時間）からこの時間で閉鎖され、その階層にいる生存者は地上へ送還される
 // next / prev: 下層・上層への門の行き先（prev が 'via' なら、来たエリアへ戻る）
 // regions: 地域ごとの設定 { name: 表示名, monsters: [[魔物 id, 重み, 'rare'?], ...], group: [最少, 最多], safe: 魔物が入れない }
+//   sizes: [[[最少, 最多], 割合], ...] を書くと、出現地点ごとに群れの大きさをこの割合で選ぶ（集団・複数・単体を混ぜる）
 // theme: 見た目（'crystal' 水晶の洞窟 / 'canyon' 峡谷 / 'dead' 亡者の地 / 'desert' 砂漠 / 'forest' 森 / 'pilgrim' 巡礼者の道 / 既定は石の回廊）
 // lighting.mode: 'crystal'（クリスタルの周りだけ明るい）/ 'night'（夜。空に星明かり。sight が見通し m、moon が月明かりの強さ）/ 既定は松明
 // isSpecialRift: 特殊な亀裂。timeMode が 'stopped'（中では時間が止まる）か 'surface'（地上と同じ時間が流れる）
@@ -305,7 +306,7 @@ export const FLOORS = [
     generator: 'canyon', theme: 'canyon',
     next: 3, prev: 1, riftPortalSpawnRate: 0.35,
     regions: {
-      main: { name: '峡谷', group: [8, 12], monsters: [['giant_wolf', 2], ['blood_wolf', 2], ['wall_mole', 3], ['mole_queen', 0.5], ['moon_bear', 1], ['horned_boar', 2], ['saber_tiger', 1], ['werewolf', 1]] },
+      main: { name: '峡谷', sizes: [[[8, 12], 0.25], [[2, 4], 0.4], [[1, 1], 0.35]], monsters: [['giant_wolf', 2], ['blood_wolf', 2], ['wall_mole', 3], ['mole_queen', 0.5], ['moon_bear', 1], ['horned_boar', 2], ['saber_tiger', 1], ['werewolf', 1]] },
     },
     lighting: { mode: 'night', ambient: 0xa8b4d8, ambientIntensity: 2.6, fog: 0x1a2236, sight: 45, moon: 1.4, stars: true, torchColor: 0xffa860 },
   },
@@ -317,11 +318,11 @@ export const FLOORS = [
     generator: 'deadland', theme: 'dead',
     next: 3, prev: 1, riftPortalSpawnRate: 0.35,
     regions: {
-      main: { name: '黒い湿原', group: [8, 12], monsters: [['ghoul', 3], ['elder_ghoul', 2], ['skeleton_warrior', 2], ['skeleton_archer', 1.5], ['skeleton_mage', 1], ['banshee', 1],
+      main: { name: '黒い湿原', sizes: [[[8, 12], 0.25], [[2, 4], 0.4], [[1, 1], 0.35]], monsters: [['ghoul', 3], ['elder_ghoul', 2], ['skeleton_warrior', 2], ['skeleton_archer', 1.5], ['skeleton_mage', 1], ['banshee', 1],
         ['death_fiend', 1], ['chimera_wolf', 1], ['ghoul_lord', 0.7], ['dullahan', 0.06, 'rare'], ['death_knight', 0.02, 'rare']] },
     },
     banshee: true,   // ときどきバンシーの泣き声が響く
-    lighting: { mode: 'night', ambient: 0x9aa4bc, ambientIntensity: 2.6, fog: 0x181c26, sight: 28, moon: 1.1, stars: true, torchColor: 0xffa860 },
+    lighting: { mode: 'night', ambient: 0xb0b8cc, ambientIntensity: 3.4, fog: 0x262b36, sight: 38, moon: 1.7, stars: true, torchColor: 0xffa860 },
   },
   {
     id: 23, depth: 2, area: '西',
@@ -331,7 +332,7 @@ export const FLOORS = [
     generator: 'desert', theme: 'desert',
     next: 3, prev: 1, riftPortalSpawnRate: 0.35,
     regions: {
-      main: { name: '砂漠', group: [8, 12], monsters: [['gnome', 3], ['fallen_gnome', 2], ['kobold', 2], ['kobold_shield', 1.5], ['kobold_spear', 1.5],
+      main: { name: '砂漠', sizes: [[[8, 12], 0.25], [[2, 4], 0.4], [[1, 1], 0.35]], monsters: [['gnome', 3], ['fallen_gnome', 2], ['kobold', 2], ['kobold_shield', 1.5], ['kobold_spear', 1.5],
         ['golem', 0.8], ['stone_soldier', 0.8], ['sandman', 1], ['sandworm', 0.8], ['death_worm', 0.008, 'rare']] },
     },
     lighting: { mode: 'night', ambient: 0xd8bc90, ambientIntensity: 2.6, fog: 0x2a2218, sight: 50, moon: 1.4, stars: true, torches: true, torchColor: 0xffa860 },
@@ -346,8 +347,8 @@ export const FLOORS = [
     steles: true,
     trap: { damage: 0.15 },   // 罠を踏むと最大 HP の 15% のダメージ
     regions: {
-      main: { name: '森', group: [10, 14], monsters: [['goblin', 4], ['goblin_sword', 2], ['goblin_archer', 2]] },
-      outer: { name: '森の外周部', group: [8, 12], monsters: [['goblin', 4], ['goblin_sword', 2], ['goblin_archer', 2], ['hobgoblin', 1.2]] },
+      main: { name: '森', sizes: [[[8, 12], 0.25], [[2, 4], 0.4], [[1, 1], 0.35]], monsters: [['goblin', 4], ['goblin_sword', 2], ['goblin_archer', 2]] },
+      outer: { name: '森の外周部', sizes: [[[8, 12], 0.25], [[2, 4], 0.4], [[1, 1], 0.35]], monsters: [['goblin', 4], ['goblin_sword', 2], ['goblin_archer', 2], ['hobgoblin', 1.2]] },
     },
     lighting: { mode: 'night', ambient: 0xb0c4e8, ambientIntensity: 3.0, fog: 0x1a2438, sight: 50, moon: 1.5, stars: true, torchColor: 0xffa860 },
   },
