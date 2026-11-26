@@ -2013,8 +2013,6 @@ function spawnRaiders([lo, hi], minDist = 28, grade = null) {
   }
   world.raidersHere = true;
   log('どこかで冒険者の悲鳴が聞こえた……。この層には略奪者がいるかもしれない。');
-  const tier = D.raiderTier(g);
-  if (tier !== D.RAIDERS.tiers[0]) log(tier === D.RAIDERS.tiers[2] ? '……ただならぬ殺気を感じる。歴戦の略奪者が潜んでいるかもしれない。' : '……手練れの気配がする。');
   return out;
 }
 function raiderSpotted(m) {
