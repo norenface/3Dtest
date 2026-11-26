@@ -507,6 +507,9 @@ export const MATERIALS = {
   veteran_mail: { name: '歴戦の鎖帷子', price: 210, rare: 1 },
   master_blade: { name: '名工の魔剣', price: 900, rare: 2 },         // 4〜3 等級の略奪者が落とす
   master_armor: { name: '名工の重鎧', price: 780, rare: 2 },
+  jeweled_ring: { name: '宝石の指輪', price: 320, rare: 1 },         // 略奪者が冒険者から奪い集めた宝飾品（売る）
+  gold_emblem: { name: '黄金の紋章', price: 650, rare: 2 },
+  ancient_orb: { name: '古代の宝珠', price: 1400, rare: 2 },
 };
 // 魔物ごとの素材の種類（ないものは体の型から決める）
 const MAT_KIND = {
@@ -564,24 +567,24 @@ export const DEBUG = { menu: true };
 // 迷宮に入った冒険者を襲う人間たち（8〜3 等級）。出現率は低いが、浅い層では魔物以上の脅威になる。
 //  ・階層に入ったとき、深さごとの確率（chance）でパーティ（party 人。3 人以上なら頭目つき）が潜んでいる
 //  ・獲物を探して階層を歩き回り、一度見つけたらどこまでも追ってくる。魔物と違って安全地帯にも入ってくる
-//  ・倒すと装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。上の等級ほど良い物（帰還の巻物・忘却の霊薬も）。精髄と魔石は落とさない
+//  ・倒すと装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。上の等級ほど良い物（高く売れる装備や宝飾品）。精髄と魔石は落とさない
 export const RAIDERS = {
   byDepth: { 1: { chance: 0.25, party: [1, 2] }, 2: { chance: 0.35, party: [2, 3] }, 3: { chance: 0.2, party: [2, 4] } },
   members: [['raider_sword', 4], ['raider_archer', 2], ['raider_dwarf', 1]],
   leader: 'raider_boss',
   // 等級帯（tier）ごとの落とし物と見た目。上の等級ほど強そうで、良い物を落とす
-  //  drops: [[ID, 確率], ...]（同じ ID を複数書くと複数個落とすことがある）。ID は素材・potion・torch・returnScroll（帰還の巻物）・oblivion（忘却の霊薬）・bag（魔石の袋）
+  //  drops: [[ID, 確率], ...]（同じ ID を複数書くと複数個落とすことがある）。ID は素材・potion・torch・bag（魔石の袋）
   //  bag.count: 魔石の袋に入っている魔石の数 / look: 見た目に重ねる設定 / size: 大きさの倍率
   tiers: [
     { grades: [8, 7], label: '',
       drops: [['raider_blade', 0.45], ['raider_armor', 0.3], ['potion', 0.3], ['torch', 0.25], ['bag', 0.35]],
       bag: { count: [2, 5] }, size: 1, look: {} },
     { grades: [6, 5], label: '手練れ',
-      drops: [['veteran_blade', 0.45], ['veteran_mail', 0.35], ['raider_blade', 0.3], ['potion', 0.55], ['potion', 0.3], ['torch', 0.35], ['returnScroll', 0.06], ['bag', 0.6]],
+      drops: [['veteran_blade', 0.45], ['veteran_mail', 0.35], ['raider_blade', 0.3], ['potion', 0.55], ['potion', 0.3], ['torch', 0.35], ['jeweled_ring', 0.15], ['bag', 0.6]],
       bag: { count: [4, 8] }, size: 1.1,
       look: { armor: 0x8a909a, head: 'helm', pauldron: 0xa8b0bc, belt: 0x4a3a2a, weaponColor: 0xe8eef8, eye: 0xffd040, plume: 0x9a2a2a } },
     { grades: [4, 3], label: '歴戦',
-      drops: [['master_blade', 0.5], ['master_armor', 0.4], ['veteran_blade', 0.4], ['veteran_mail', 0.3], ['potion', 0.75], ['potion', 0.5], ['torch', 0.4], ['returnScroll', 0.25], ['oblivion', 0.08], ['bag', 0.9]],
+      drops: [['master_blade', 0.5], ['master_armor', 0.4], ['veteran_blade', 0.4], ['veteran_mail', 0.3], ['potion', 0.75], ['potion', 0.5], ['torch', 0.4], ['jeweled_ring', 0.35], ['gold_emblem', 0.25], ['ancient_orb', 0.08], ['bag', 0.9]],
       bag: { count: [6, 12] }, size: 1.2,
       look: { armor: 0x2a2a34, cloth: 0x1a1a22, head: 'helm', pauldron: 0xc8a040, spikes: 0xe0d0a0, belt: 0xc8a040, cape: 0x6a1020, horns: 0xe0d6c0,
         weaponColor: 0x30303a, weaponGlow: 0xff4020, eye: 0xff3010, aura: 0xff5020, shield: 0x2a2a34, shieldMetal: true, shieldBoss: 0xc8a040 } },
@@ -674,7 +677,8 @@ export const HUB = {
   // 松明：暗黒地帯に入ると自動で灯り、自分の近く（sight m）だけ見えるようになる。暗黒地帯の中にいる間だけ燃え、1 本で burnHours 時間（ゲーム内）もつ。
   // 持っていないと、暗黒地帯ではほとんど何も見えない（lighting.darkFog）
   torch: { name: '松明', description: '暗黒地帯に入ると自動で灯り、自分の近くだけ見えるようになる。1 本で暗黒地帯の中を 12 時間（ゲーム内）照らす。', price: 40, max: 5, burnHours: 12, sight: 9, light: 16, lightRange: 11 },
-  oblivion: { name: '忘却の霊薬', description: '吸収した精髄を 1 つ魂から取り除く。とても貴重。', price: 400 },
+  oblivion: { name: '忘却の霊薬', description: '吸収した精髄を 1 つ魂から取り除く。とても貴重。', price: 400,
+    inShop: false },   // いまは手に入らない（入手方法は今後追加）
   // 迷宮から地上へ戻る手段は「階層の閉鎖」「力尽きる（出発前に戻る）」と、この巻物のような特殊な効果だけ
   returnScroll: { name: '帰還の巻物', description: '迷宮の中で読むと、その場から地上へ帰還できる（魔石は持ち帰れる）。近くに魔物がいると読めない。', price: 250, max: 1,
     inShop: false },   // いまは商店で売っていない（入手方法は今後追加）

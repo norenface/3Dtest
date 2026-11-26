@@ -164,7 +164,7 @@ function renderTab(s) {
         : row(`防具：${a[s.armorLevel].name}`, 'これ以上は強化できない。', null, 'none', false, '最大')}
       ${H.returnScroll.inShop ? row(`${H.returnScroll.name}（所持 ${s.returnScrolls}/${H.returnScroll.max}）`, H.returnScroll.description, H.returnScroll.price, 'buyReturnScroll',
         s.gold >= H.returnScroll.price && s.returnScrolls < H.returnScroll.max) : ''}
-      ${row(`${H.oblivion.name}（所持 ${s.oblivion}）`, H.oblivion.description + '「精髄」タブで使う。', H.oblivion.price, 'buyOblivion', s.gold >= H.oblivion.price)}`;
+      ${H.oblivion.inShop ? row(`${H.oblivion.name}（所持 ${s.oblivion}）`, H.oblivion.description + '「精髄」タブで使う。', H.oblivion.price, 'buyOblivion', s.gold >= H.oblivion.price) : ''}`;
   }
   if (tab === 'craft') {
     const M = D.MATERIALS;
@@ -319,7 +319,7 @@ function act(name, arg) {
       break;
     }
     case 'buyOblivion':
-      if (s.gold >= H.oblivion.price) { s.gold -= H.oblivion.price; s.oblivion++; note = `${H.oblivion.name}を手に入れた。`; }
+      if (H.oblivion.inShop && s.gold >= H.oblivion.price) { s.gold -= H.oblivion.price; s.oblivion++; note = `${H.oblivion.name}を手に入れた。`; }
       break;
     case 'slotToggle': {
       const i = s.skillSlots.indexOf(arg);
