@@ -220,6 +220,58 @@ export const MONSTERS = {
 
 // 亀裂の主（次元の亀裂にいるボス）。マップの X の場所に bossMonster が現れる。
 // 通常の個体より強く大きく、魔石を多く落とし、essenceChance の確率で精髄を落とす
+// ------------------------------------------------------------------ 敵の強さと戦い方
+// hpMul / atkMul：すべての敵の HP・攻撃力の倍率
+// windupJitter：攻撃の溜め時間のばらつき（±割合。タイミングを読みにくくする）
+// trackDuringWindup：溜めの間も、この速さの割合で詰め寄ってくる（下がりながら振るだけでは逃げ切れない）
+// engage / strikeStep / strikeReach：少し離れた所から溜め、攻撃の瞬間に踏み込んで斬る
+// knockback / breakKnockback：普通に斬られたとき／体勢が崩れたときに押される強さ
+// poise：体勢（最大 HP × ratio と、flat + 等級ごとに perGrade の大きいほう。大型は 1.6 倍）。削り切ると攻撃を中断してよろける。regen：毎秒の回復（最大値に対する割合）
+// backpedal：プレイヤーが後ろへ下がるときの速さの倍率
+export const ENEMY = {
+  hpMul: 1.7, atkMul: 1.6,
+  windupJitter: 0.35,
+  trackDuringWindup: 0.6,
+  engage: 1.3,              // 間合いのこれだけ外側から溜めを始め、攻撃の瞬間に踏み込んで斬る
+  strikeStep: 7.5, strikeReach: 0.45,   // 踏み込みの速さ（m/s）。攻撃中（0.22 秒）に間合い + strikeReach まで来たら当たる
+  knockback: 2.0, breakKnockback: 7,
+  chaseSpeed: 1.2,          // 戦闘中（追いかけているとき）の速さの倍率
+  poise: { ratio: 0.3, flat: 30, perGrade: 12, regen: 0.3, breakStagger: 0.8 },
+  backpedal: 0.6,
+};
+// 戦い方（体の型・武器で決まる。等級が上がるほど回避・連撃が増える）
+//  dodge：プレイヤーが斬りかかったとき、横・後ろへ跳んでかわす確率
+//  combo：連撃の最大回数（溜めの短い追撃）
+//  guard：盾で正面からの攻撃を防ぐ（ダメージ guard 倍・体勢が崩れない）。横や背後、攻撃の直後は防げない
+//  charge：中距離から溜めて突進してくる
+//  hitRun：攻撃したあと距離を取ってから、また攻めてくる
+//  strafe：攻撃の合間に、プレイヤーの周りを回り込みながら隙をうかがう
+//  kite：遠距離攻撃の敵は、近寄られると下がって間合いを取る
+//  superArmor：攻撃の溜めを斬られても止まらない（大型）
+export const AI_STYLES = {
+  fighter: { dodge: 0.18, combo: 1, strafe: true },                       // 剣・棍棒を持つ人型
+  shield: { dodge: 0.05, combo: 1, strafe: true, guard: 0.25 },           // 盾持ち
+  archer: { dodge: 0.25, kite: true, strafe: true },                     // 弓・魔法
+  beast: { dodge: 0.12, combo: 1, charge: true, hitRun: true, strafe: true },
+  heavy: { superArmor: true, combo: 1 },                                  // ゴーレム・樹木など大型
+  spirit: { dodge: 0.3, hitRun: true, strafe: true },
+  worm: { charge: true, superArmor: true },
+};
+export function aiStyle(def) {
+  const L = def.look ?? {};
+  let base;
+  if (def.ranged) base = AI_STYLES.archer;
+  else if (def.model === 'beast') base = AI_STYLES.beast;
+  else if (def.model === 'golem' || def.model === 'tree') base = AI_STYLES.heavy;
+  else if (def.model === 'spirit') base = AI_STYLES.spirit;
+  else if (def.model === 'worm') base = AI_STYLES.worm;
+  else if (L.shield) base = AI_STYLES.shield;
+  else base = AI_STYLES.fighter;
+  const up = Math.max(0, 9 - (def.grade ?? 9));          // 等級が高いほど上手くなる
+  return { ...base, dodge: Math.min(0.55, (base.dodge ?? 0) * (1 + up * 0.18) + (def.human ? 0.08 : 0)),
+    combo: (base.combo ?? 0) + (up >= 3 ? 1 : 0) + (up >= 6 ? 1 : 0), superArmor: !!base.superArmor || def.knockbackResist >= 0.9 };
+}
+
 export const BOSS = { title: '亀裂の主', hp: 3.0, attack: 1.3, size: 1.4, gradeUp: 2, essenceChance: 0.33 };
 
 // 魔石の等級（9 等級がいちばん下、1 等級がいちばん上）。price: 買取価格（ゴールド） / color: 見た目の色

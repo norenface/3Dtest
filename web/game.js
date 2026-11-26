@@ -981,7 +981,8 @@ function spawnMonster(id, pos, boss = false, grade = null) {
   const base = grade ? D.raiderDefAt(id, grade) : D.MONSTERS[id];
   const def = boss ? { ...base, name: `${B.title}（${base.name}）`, radius: base.radius * B.size, attackRange: base.attackRange * B.size,
     knockbackResist: Math.max(base.knockbackResist, 0.9) } : base;
-  const s0 = world.floor.monsterScale ?? { hp: 1, attack: 1 };
+  const s1 = world.floor.monsterScale ?? { hp: 1, attack: 1 };
+  const s0 = { hp: s1.hp * D.ENEMY.hpMul, attack: s1.attack * D.ENEMY.atkMul };   // 全体の強さ（D.ENEMY）
   const scale = boss ? { hp: s0.hp * B.hp, attack: s0.attack * B.attack } : s0;
   const model = makeMonster(def.model, def.look);
   if (boss) model.group.scale.setScalar(B.size);
@@ -1006,7 +1007,12 @@ function spawnMonster(id, pos, boss = false, grade = null) {
     boss,
     state: 'idle', timer: 0, cooldown: 0, flash: 0, anim: Math.random() * 10, stun: 0,
     path: null, pathTimer: 0, aggro: false, wanderTarget: null, deadTimer: 0,
+    ai: boss ? { ...D.aiStyle(def), superArmor: true } : D.aiStyle(def),
+    combo: 0, evade: 0, strafeDir: Math.random() < 0.5 ? 1 : -1, strafeT: 0, retreat: 0, lastSwing: 0, windupTotal: def.windup,
   };
+  const PZ = D.ENEMY.poise;
+  m.maxPoise = Math.round(Math.max(m.maxHp * PZ.ratio, PZ.flat + PZ.perGrade * Math.max(0, 9 - def.grade)) * (m.ai.superArmor ? 1.6 : 1));
+  m.poise = m.maxPoise;
   world.monsters.push(m);
   return m;
 }
@@ -1213,6 +1219,7 @@ function playerAttack() {
   player.attackTimer = 0.32;
   player.attackCooldown = F.attackCooldown;
   player.hitDone = false;
+  player.swing = (player.swing ?? 0) + 1;
   player.attackKind = 'normal';
   player.attackSkill = null;
 }
@@ -1230,6 +1237,7 @@ function resolvePlayerHit() {
     const d = Math.hypot(dx, dz);
     if (d > range + m.def.radius) continue;
     if (d > 0.3 && (dx * fx + dz * fz) / d < cosArc) continue;
+    if (m.evade > 0) { const q = m.pos.clone(); q.y = 1.4 + m.def.radius; popup(q, '回避', ''); continue; }
     const crit = Math.random() < 0.08;
     let dmg = player.st.attack * player.st.meleeMultiplier * skillMult * (0.9 + Math.random() * 0.2) * (crit ? 1.6 : 1);
     dmg = Math.max(1, Math.round(dmg - m.def.defense));
@@ -1257,6 +1265,7 @@ function useSkill(slot) {
     player.attackTimer = 0.32;
     player.attackCooldown = F.attackCooldown;
     player.hitDone = false;
+    player.swing = (player.swing ?? 0) + 1;
     player.attackKind = 'skill';
     player.attackSkill = sk;
     const fx = -Math.sin(player.facing), fz = -Math.cos(player.facing);
@@ -1268,7 +1277,7 @@ function useSkill(slot) {
       if (Math.hypot(m.pos.x - player.pos.x, m.pos.z - player.pos.z) > sk.radius) continue;
       m.stun = sk.stunTime;
       m.aggro = true;
-      if (m.state === 'windup' || m.state === 'strike') { m.state = 'chase'; m.timer = 0; }
+      if (m.state === 'windup' || m.state === 'strike' || m.state === 'charge') { m.state = 'chase'; m.timer = 0; m.special = null; }
       const p = m.pos.clone(); p.y = 2.2 + m.def.radius;
       popup(p, 'ひるんだ！', 'gain');
       n++;
@@ -1312,14 +1321,30 @@ function hitMonster(m, dmg, crit, nx, nz) {
     burst(new THREE.Vector3(m.pos.x, 1.0, m.pos.z), 0x9ad8ff, 8, 2, 1);
     return;
   }
+  if (!m.aggro) { m.aggro = true; onAggro(m); }
+  const E = D.ENEMY;
+  // 盾持ち：正面からの攻撃は盾で受ける（横・背後、攻撃の直後・よろけ中は防げない）
+  const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
+  const frontal = (-nx * fx + -nz * fz) > 0.4;
+  const guarded = m.ai.guard && frontal && !['strike', 'recover', 'charge'].includes(m.state) && m.stun <= 0;
+  if (guarded) {
+    dmg = Math.max(1, Math.round(dmg * m.ai.guard));
+    burst(new THREE.Vector3(m.pos.x - nx * 0.4, 1.1, m.pos.z - nz * 0.4), 0xffe0a0, 10, 3, 1);
+  }
   m.hp -= dmg;
   m.flash = 0.12;
-  if (!m.aggro) { m.aggro = true; onAggro(m); }
-  const kb = 6 * (1 - m.def.knockbackResist);
+  // 体勢：削り切ると攻撃を中断してよろける（大きく押し返される）。それまでは少し押されるだけで攻撃は止まらない
+  if (!guarded) m.poise -= dmg;
+  let broke = false;
+  if (m.poise <= 0) {
+    broke = true; m.poise = m.maxPoise;
+    if (m.state === 'windup' || m.state === 'charge') { m.state = 'recover'; m.timer = E.poise.breakStagger; m.combo = 0; }
+    else if (m.state !== 'strike') { m.state = 'recover'; m.timer = E.poise.breakStagger * 0.6; }
+  }
+  const kb = (broke ? E.breakKnockback : guarded ? E.knockback * 0.5 : E.knockback) * (1 - m.def.knockbackResist);
   m.vel.x += nx * kb; m.vel.z += nz * kb;
-  if (m.state === 'windup' && m.def.knockbackResist < 0.5) { m.state = 'recover'; m.timer = 0.4; } // 小型の敵は攻撃を中断される
   const p = m.pos.clone(); p.y = 1.4 + m.def.radius;
-  popup(p, String(dmg), crit ? 'crit' : '');
+  popup(p, guarded ? `防御 ${dmg}` : broke ? `${dmg} 崩し` : String(dmg), crit || broke ? 'crit' : '');
   burst(new THREE.Vector3(m.pos.x, 1.0, m.pos.z), crit ? 0xffd84a : 0xffffff, crit ? 22 : 12, 4, 2);
   world.run.damageDealt += dmg;
   if (m.hp <= 0) killMonster(m);
@@ -1502,6 +1527,7 @@ function updatePlayer(dt) {
     dashing = true;
   }
   if (player.attackTimer > 0) speed *= 0.35;
+  if (my < 0) speed *= 1 - (1 - D.ENEMY.backpedal) * Math.min(1, -my / Math.max(0.01, Math.hypot(mx, my)));   // 後ろへ下がるのは遅い
   if (moving) {
     const sin = Math.sin(camState.yaw), cos = Math.cos(camState.yaw);
     // 前 = カメラが向いている方向（-Z をカメラの yaw で回したもの）
@@ -1596,6 +1622,9 @@ function updateMonsters(dt) {
     if (m.aggro && !def.human && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
     const prevX = m.pos.x, prevZ = m.pos.z;
     m.cooldown = Math.max(0, m.cooldown - dt);
+    m.evade = Math.max(0, m.evade - dt);
+    m.poise = Math.min(m.maxPoise, m.poise + m.maxPoise * D.ENEMY.poise.regen * dt);
+    if (m.aggro) tryDodge(m, dist, toP);
 
     let moveDir = null, speedMul = 1;
     if (player.dead) m.aggro = false;
@@ -1635,10 +1664,12 @@ function updateMonsters(dt) {
             m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * 8);
             break;
           }
-          if (dist < def.attackRange && m.cooldown <= 0 && (!def.ranged || sees)) {
-            m.state = 'windup'; m.timer = def.windup;
+          if (dist < def.attackRange + (def.ranged ? 0 : D.ENEMY.engage) && m.cooldown <= 0 && (!def.ranged || sees)) {
+            startWindup(m, false);
             break;
           }
+          const tactic = combatTactics(m, dist, toP, sees, dt);
+          if (tactic) { moveDir = tactic.dir; speedMul = tactic.speed; m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * 8); break; }
           // 遠距離攻撃の魔物は、間合いの内側では近づかない
           if (dist > def.attackRange * (def.ranged ? 0.75 : 0.8)) {
             if (sees && walkLine(m.pos, player.pos)) moveDir = toP.clone().normalize();
@@ -1665,22 +1696,43 @@ function updateMonsters(dt) {
           if (w.length() > 0.3) { moveDir = w.normalize(); speedMul = 0.3; m.facing = turnToward(m.facing, Math.atan2(-w.x, -w.z), dt * 4); }
         }
         break;
-      case 'windup':
+      case 'windup': {
         m.timer -= dt;
-        m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * 3);
+        m.facing = turnToward(m.facing, Math.atan2(-toP.x, -toP.z), dt * (m.special === 'charge' ? 5 : 4));
+        // 溜めの間も詰め寄ってくる（下がっても逃げ切れない）
+        if (!def.ranged && m.special !== 'charge' && dist > def.attackRange * 0.7) { moveDir = toP.clone().normalize(); speedMul = D.ENEMY.trackDuringWindup; }
         if (m.timer <= 0) {
-          m.state = 'strike'; m.timer = 0.22;
-          if (def.lunge) { m.vel.x += -Math.sin(m.facing) * 9; m.vel.z += -Math.cos(m.facing) * 9; } // 飛びかかる
-          if (def.ranged) fireProjectile(m);
-          else if (dist < def.attackRange + 0.6) {
-            const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
-            if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) hurtPlayer(m.attack, m.pos.x, m.pos.z);
+          const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
+          if (m.special === 'charge') {   // 突進
+            m.state = 'charge'; m.timer = 0.5; m.hitDone = false;
+            m.chargeDir = new THREE.Vector3(fx, 0, fz);
+            break;
           }
+          m.state = 'strike'; m.timer = 0.22; m.hitDone = !!def.ranged;
+          if (def.ranged) fireProjectile(m);
+          else { const st = def.lunge ? 9 : D.ENEMY.strikeStep; m.vel.x += fx * st; m.vel.z += fz * st; }   // 踏み込んで斬る（飛びかかる）
         }
         break;
+      }
+      case 'charge': {   // 一直線に突っ込んでくる。当たると大きなダメージ。外れると隙ができる
+        m.timer -= dt;
+        moveDir = m.chargeDir; speedMul = 3.2;
+        if (!m.hitDone && dist < def.radius + 0.9) { m.hitDone = true; hurtPlayer(Math.round(m.attack * 1.3), m.pos.x, m.pos.z); m.timer = Math.min(m.timer, 0.1); }
+        if (m.timer <= 0) { m.state = 'recover'; m.timer = m.hitDone ? 0.5 : 0.9; m.cooldown = def.attackCooldown; m.special = null; }
+        break;
+      }
       case 'strike':
         m.timer -= dt;
-        if (m.timer <= 0) { m.state = 'recover'; m.timer = 0.3; m.cooldown = def.attackCooldown; }
+        // 攻撃中（踏み込みの間）に間合いに入ったら当たる
+        if (!m.hitDone && dist < def.attackRange + D.ENEMY.strikeReach) {
+          const fx = -Math.sin(m.facing), fz = -Math.cos(m.facing);
+          if (dist < 0.5 || (toP.x * fx + toP.z * fz) / dist > 0.3) { m.hitDone = true; hurtPlayer(m.attack, m.pos.x, m.pos.z); }
+        }
+        if (m.timer <= 0) {
+          if (m.combo > 0 && !def.ranged && dist < def.attackRange + 2) { m.combo--; startWindup(m, true); break; }   // 連撃
+          m.state = 'recover'; m.timer = 0.3; m.cooldown = def.attackCooldown * (0.8 + Math.random() * 0.5);
+          if (m.ai.hitRun) m.retreat = 0.6 + Math.random() * 0.6;   // 攻撃したら一度離れる
+        }
         break;
       case 'recover':
         m.timer -= dt;
@@ -1689,8 +1741,8 @@ function updateMonsters(dt) {
     }
 
     if (moveDir) {
-      m.pos.x += moveDir.x * def.speed * speedMul * dt;
-      m.pos.z += moveDir.z * def.speed * speedMul * dt;
+      m.pos.x += moveDir.x * def.speed * speedMul * (m.aggro ? D.ENEMY.chaseSpeed : 1) * dt;
+      m.pos.z += moveDir.z * def.speed * speedMul * (m.aggro ? D.ENEMY.chaseSpeed : 1) * dt;
     }
     m.pos.x += m.vel.x * dt; m.pos.z += m.vel.z * dt;
     m.vel.multiplyScalar(Math.max(0, 1 - dt * 7));
@@ -1708,6 +1760,53 @@ function updateMonsters(dt) {
 
     animateMonster(m, moveDir ? def.speed * speedMul : 0);
   }
+}
+
+// ====================================================================== 戦い方（D.ENEMY / D.AI_STYLES）
+// 攻撃の溜めを始める。溜め時間はばらつく。連撃の追撃は溜めが短い
+function startWindup(m, followUp) {
+  const J = D.ENEMY.windupJitter;
+  m.state = 'windup'; m.special = null;
+  m.windupTotal = m.timer = m.def.windup * (followUp ? 0.55 : 1) * (1 - J + Math.random() * J * 2);
+  if (!followUp) m.combo = m.ai.combo ? Math.floor(Math.random() * (m.ai.combo + 1)) : 0;
+}
+// プレイヤーが斬りかかった瞬間、近くの敵は確率で横・後ろへ跳んでかわす（溜め・攻撃中はかわせない）
+function tryDodge(m, dist, toP) {
+  if (m.lastSwing === player.swing) return;
+  m.lastSwing = player.swing;
+  if (!player.swing || !m.ai.dodge || dist > F.attackRange + m.def.radius + 0.6) return;
+  if (!['chase', 'recover', 'idle'].includes(m.state) || m.stun > 0) return;
+  if (Math.random() >= m.ai.dodge) return;
+  const away = toP.clone().normalize().negate(), side = new THREE.Vector3(-away.z, 0, away.x).multiplyScalar(Math.random() < 0.5 ? 1 : -1);
+  const dir = away.multiplyScalar(0.6).add(side).normalize();
+  m.vel.x += dir.x * 8; m.vel.z += dir.z * 8;
+  m.evade = 0.3;
+  if (m.state === 'recover') m.state = 'chase';
+  m.cooldown = Math.min(m.cooldown, 0.25);   // かわしたら、すぐに反撃してくる
+}
+// 追いかけている最中の動き。null なら普通に近づく
+function combatTactics(m, dist, toP, sees, dt) {
+  const def = m.def, A = m.ai, dirTo = toP.clone().normalize();
+  // 攻撃したあと距離を取る
+  if (m.retreat > 0) { m.retreat -= dt; return { dir: dirTo.clone().negate().add(new THREE.Vector3(-dirTo.z, 0, dirTo.x).multiplyScalar(m.strafeDir * 0.6)).normalize(), speed: 0.9 }; }
+  // 遠距離：近寄られたら下がる
+  if (A.kite && dist < 4.5) return { dir: dirTo.clone().negate().add(new THREE.Vector3(-dirTo.z, 0, dirTo.x).multiplyScalar(m.strafeDir * 0.5)).normalize(), speed: 0.85 };
+  // 突進：中距離から溜めて突っ込んでくる
+  if (A.charge && sees && m.cooldown <= 0 && dist > 3.5 && dist < 9 && walkLine(m.pos, player.pos) && Math.random() < dt * 1.2) {
+    m.state = 'windup'; m.special = 'charge'; m.windupTotal = m.timer = 0.65 + Math.random() * 0.25; m.combo = 0;
+    return { dir: dirTo, speed: 0 };
+  }
+  // 攻撃の合間（次の攻撃までの待ち時間）は、プレイヤーの周りを回り込んで隙をうかがう
+  if (A.strafe && sees && m.cooldown > 0.15 && dist < 4.5) {
+    m.strafeT -= dt;
+    if (m.strafeT <= 0) { m.strafeT = 0.8 + Math.random() * 1.2; if (Math.random() < 0.5) m.strafeDir *= -1; }
+    const keep = dist < 2.2 ? -0.5 : dist > 3.2 ? 0.5 : 0;   // 2.2〜3.2m を保つ
+    const dir = new THREE.Vector3(-dirTo.z, 0, dirTo.x).multiplyScalar(m.strafeDir).add(dirTo.clone().multiplyScalar(keep)).normalize();
+    const probe = m.pos.clone().addScaledVector(dir, 1.0);
+    if (isWallCell(Math.round(probe.z / T), Math.round(probe.x / T))) { m.strafeDir *= -1; return { dir: dirTo, speed: 0.4 }; }
+    return { dir, speed: 0.75 };
+  }
+  return null;
 }
 
 // ====================================================================== 出現法則（群れ・リンク・巻き込み）
@@ -1806,32 +1905,32 @@ function animateMonster(m, speed) {
   if (P.kind === 'float') {
     // 霊体：ふわふわ浮く。予備動作で腕を振り上げる
     P.body.position.y = 0.25 + Math.sin(m.anim * 2.2) * 0.12;
-    const up = m.state === 'windup' ? -2.2 * Math.min(1, (1 - m.timer / m.def.windup) * 1.5) : m.state === 'strike' ? 0.6 : Math.sin(m.anim * 3) * 0.2;
+    const up = m.state === 'windup' ? -2.2 * Math.min(1, (1 - m.timer / (m.windupTotal || m.def.windup)) * 1.5) : (m.state === 'strike' || m.state === 'charge') ? 0.6 : Math.sin(m.anim * 3) * 0.2;
     P.armL.rotation.x = up; P.armR.rotation.x = up;
   } else if (P.kind === 'worm') {
     // 地を這う：体節が波打つ。予備動作で頭を持ち上げる
     P.segs.forEach((sg, i) => { sg.position.x = Math.sin(m.anim * 5 - i * 0.9) * 0.15 * (speed > 0.1 ? 1.5 : 0.5); });
-    P.body.rotation.x = m.state === 'windup' ? -0.5 * Math.min(1, (1 - m.timer / m.def.windup) * 1.5) : m.state === 'strike' ? 0.2 : 0;
+    P.body.rotation.x = m.state === 'windup' ? -0.5 * Math.min(1, (1 - m.timer / (m.windupTotal || m.def.windup)) * 1.5) : (m.state === 'strike' || m.state === 'charge') ? 0.2 : 0;
   } else if (P.kind === 'tree') {
     // 樹木：枝を振る
-    const t = m.state === 'windup' ? Math.min(1, (1 - m.timer / m.def.windup) * 1.5) : 0;
-    P.armL.rotation.x = m.state === 'windup' ? -1.8 * t : m.state === 'strike' ? 0.8 : Math.sin(m.anim * 1.5) * 0.15;
+    const t = m.state === 'windup' ? Math.min(1, (1 - m.timer / (m.windupTotal || m.def.windup)) * 1.5) : 0;
+    P.armL.rotation.x = m.state === 'windup' ? -1.8 * t : (m.state === 'strike' || m.state === 'charge') ? 0.8 : Math.sin(m.anim * 1.5) * 0.15;
     P.armR.rotation.x = P.armL.rotation.x;
     P.body.rotation.z = Math.sin(m.anim * (speed > 0.1 ? 6 : 1)) * 0.05;
   } else if (P.kind === 'quad') {
     P.legs.forEach((l, i) => { l.rotation.x = (i === 0 || i === 3 ? sw : -sw); });
     P.tail.rotation.y = Math.sin(m.anim * 6) * 0.4;
-    P.head.rotation.x = m.state === 'windup' ? 0.35 : (m.state === 'strike' ? -0.3 : 0);
+    P.head.rotation.x = m.state === 'windup' ? 0.35 : ((m.state === 'strike' || m.state === 'charge') ? -0.3 : 0);
     P.body.position.y = m.state === 'windup' ? -0.12 : 0;
   } else {
     P.legL.rotation.x = sw; P.legR.rotation.x = -sw;
     P.armL.rotation.x = -sw * 0.6;
     if (m.state === 'windup') {
-      const t = 1 - m.timer / m.def.windup;
+      const t = 1 - m.timer / (m.windupTotal || m.def.windup);
       P.armR.rotation.x = -2.6 * Math.min(1, t * 1.5);
       if (P.twoArm) P.armL.rotation.x = -2.6 * Math.min(1, t * 1.5);
       P.body.rotation.x = 0.15 * t;
-    } else if (m.state === 'strike') {
+    } else if ((m.state === 'strike' || m.state === 'charge')) {
       P.armR.rotation.x = 0.8;
       if (P.twoArm) P.armL.rotation.x = 0.8;
       P.body.rotation.x = -0.15;
@@ -2899,6 +2998,7 @@ window.game = {
   get state() { return world.state; },
   startRun, endRun, openMenu, closeModal,
   teleport(x, z) { player.pos.set(x, 0, z); },
+  hitMonsterTest(m, dmg, nx, nz) { player.attackKind = 'normal'; hitMonster(m, dmg, false, nx, nz); },
   face(x, z) { camState.yaw = Math.atan2(-(x - player.pos.x), -(z - player.pos.z)); camState.pitch = -0.1; },
   get cam() { return camState; },
   tile(r, c) { return cellCenter(r, c); },
