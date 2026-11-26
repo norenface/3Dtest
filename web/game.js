@@ -975,9 +975,9 @@ function refreshStats(keepRatio = true) {
 
 // ====================================================================== モンスター
 // boss: 亀裂の主（D.BOSS の倍率で強く・大きくなり、精髄を BOSS.essenceChance の確率で落とす）
-function spawnMonster(id, pos, boss = false) {
+function spawnMonster(id, pos, boss = false, grade = null) {
   const B = D.BOSS;
-  const base = D.MONSTERS[id];
+  const base = grade ? D.raiderDefAt(id, grade) : D.MONSTERS[id];
   const def = boss ? { ...base, name: `${B.title}（${base.name}）`, radius: base.radius * B.size, attackRange: base.attackRange * B.size,
     knockbackResist: Math.max(base.knockbackResist, 0.9) } : base;
   const s0 = world.floor.monsterScale ?? { hp: 1, attack: 1 };
@@ -1968,8 +1968,10 @@ function fadeTransition(fn) {
 
 // ====================================================================== 略奪者
 // プレイヤーから minDist m 以上離れた所にパーティを出す。3 人以上なら頭目がつく
-function spawnRaiders([lo, hi], minDist = 28) {
+// grade：パーティの等級（省略すると深さの重み表 D.RAIDERS.gradeWeights から選ぶ）。頭目は 1 つ上（3 等級が上限）
+function spawnRaiders([lo, hi], minDist = 28, grade = null) {
   const n = lo + Math.floor(Math.random() * (hi - lo + 1));
+  const g = grade ?? D.rollRaiderGrade(world.floor.depth ?? 1);
   const cells = [];
   for (let r = 0; r < world.rows; r++) for (let c = 0; c < world.cols; c++) {
     if (isWallCell(r, c) || '.mC^K'.indexOf(world.grid[r][c]) < 0) continue;
@@ -1985,7 +1987,7 @@ function spawnRaiders([lo, hi], minDist = 28) {
     else { const list = D.RAIDERS.members, tot = list.reduce((s, [, w]) => s + w, 0); let x = Math.random() * tot; id = list.find(([, w]) => (x -= w) <= 0)?.[0] ?? list[0][0]; }
     const p = center.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2.5, 0, (Math.random() - 0.5) * 2.5));
     collide(p, 0.45);
-    const m = spawnMonster(id, p);
+    const m = spawnMonster(id, p, false, id === D.RAIDERS.leader ? Math.max(3, g - 1) : g);
     out.push(m);
   }
   world.raidersHere = true;
@@ -2003,7 +2005,7 @@ function raiderDrops(m) {
   const bag = {};
   for (const [id, ch] of D.RAIDERS.drops) {
     if (!(Math.random() < ch || world.forceLoot)) continue;
-    if (id === 'bag') { const B = D.RAIDERS.bag; const n = B.count[0] + Math.floor(Math.random() * (B.count[1] - B.count[0] + 1)); for (let i = 0; i < n; i++) addStone(bag, B.grades[Math.floor(Math.random() * B.grades.length)]); }
+    if (id === 'bag') { const B = D.RAIDERS.bag; const n = B.count[0] + Math.floor(Math.random() * (B.count[1] - B.count[0] + 1)); for (let i = 0; i < n; i++) addStone(bag, Math.min(9, m.def.grade + B.grades[Math.floor(Math.random() * B.grades.length)])); }
     else if (D.MATERIALS[id]) placeLoot(...at(), 'mat', id);
     else placeLoot(...at(), 'item', id);
   }

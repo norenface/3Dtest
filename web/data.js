@@ -110,7 +110,7 @@ export const ESSENCES = {
 // drops: 精髄のドロップ率。精髄はまず落ちないレア（通常の魔物は 0.1〜1%）。亀裂の主（ボス）は BOSS.essenceChance で落とす
 // ranged: 遠距離攻撃（弓・魔法）。physImmune: 通常攻撃が効かない霊体（精髄スキルなら効く）。lunge: 攻撃の瞬間に飛びかかる
 // 固有名詞は一般的なファンタジーの名前にしている（原作にしかない名前は使わない）
-const GRADE_BASE = { 9: [30, 7], 8: [70, 12], 7: [150, 20], 6: [300, 32], 5: [560, 48], 4: [950, 66], 3: [1500, 90], 2: [2400, 125], 1: [4000, 170] };
+export const GRADE_BASE = { 9: [30, 7], 8: [70, 12], 7: [150, 20], 6: [300, 32], 5: [560, 48], 4: [950, 66], 3: [1500, 90], 2: [2400, 125], 1: [4000, 170] };
 function mon(id, name, grade, model, look, o = {}) {
   const [hp, atk] = GRADE_BASE[grade];
   return {
@@ -552,7 +552,7 @@ export const RECIPES = [
 export const DEBUG = { menu: true };
 
 // ------------------------------------------------------------------ 略奪者
-// 迷宮に入った冒険者を襲い、持ち物を奪う人間たち。出現率は低いが、浅い層では魔物以上の脅威になる。
+// 迷宮に入った冒険者を襲う人間たち（8〜3 等級）。出現率は低いが、浅い層では魔物以上の脅威になる。
 //  ・階層に入ったとき、深さごとの確率（chance）でパーティ（party 人。3 人以上なら頭目つき）が潜んでいる
 //  ・獲物を探して階層を歩き回り、一度見つけたらどこまでも追ってくる。魔物と違って安全地帯にも入ってくる
 //  ・倒すと装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。精髄と魔石は落とさない
@@ -561,8 +561,32 @@ export const RAIDERS = {
   members: [['raider_sword', 4], ['raider_archer', 2], ['raider_dwarf', 1]],
   leader: 'raider_boss',
   drops: [['raider_blade', 0.45], ['raider_armor', 0.3], ['potion', 0.3], ['torch', 0.25], ['bag', 0.35]],
-  bag: { grades: [9, 9, 8], count: [2, 5] },   // 魔石の袋の中身
+  bag: { grades: [2, 2, 1], count: [2, 5] },   // 魔石の袋の中身：略奪者の等級 + この数の等級の魔石（9 等級より下にはならない）
+  // 略奪者の等級（8〜3 等級）。パーティごとに深さの重み表から 1 つ選ぶ（頭目はそれより 1 つ上。3 等級が上限）。
+  // 浅い層ほど低い等級がとても出やすく、高い等級ほど出にくい。1 層の 4・3 等級は 1000 回に 1 回ほど
+  gradeWeights: {
+    1: { 8: 70, 7: 24, 6: 5, 5: 0.9, 4: 0.09, 3: 0.01 },
+    2: { 8: 40, 7: 35, 6: 17, 5: 6, 4: 1.8, 3: 0.2 },
+    3: { 8: 18, 7: 30, 6: 28, 5: 16, 4: 6.5, 3: 1.5 },
+    deep: { 8: 6, 7: 16, 6: 28, 5: 27, 4: 16, 3: 7 },
+  },
+  defensePerGrade: 2,   // 等級が 1 つ上がるごとに防御 +2（ステータスは魔物と同じ等級の基準で伸びる）
 };
+// 略奪者をその等級の強さにした定義を返す（HP・攻撃は GRADE_BASE の比で伸び縮みする）
+export function raiderDefAt(id, grade) {
+  const b = MONSTERS[id];
+  const [h0, a0] = GRADE_BASE[b.grade], [h1, a1] = GRADE_BASE[grade];
+  return { ...b, grade, name: `${b.name}［${grade}等級］`,
+    hp: Math.round(b.hp * h1 / h0), attack: Math.round(b.attack * a1 / a0),
+    defense: Math.max(0, b.defense + (b.grade - grade) * RAIDERS.defensePerGrade) };
+}
+export function rollRaiderGrade(depth) {
+  const W = RAIDERS.gradeWeights[depth] ?? RAIDERS.gradeWeights.deep;
+  const list = Object.entries(W), tot = list.reduce((s, [, w]) => s + w, 0);
+  let x = Math.random() * tot;
+  for (const [g, w] of list) if ((x -= w) <= 0) return +g;
+  return 8;
+}
 
 // ------------------------------------------------------------------ 第3層のギミック
 // 魔女の目：魔女の森に滞在した時間（hoursPerStack ごと）と、森で倒した魔物（perKill）で蓄積する（最大 max 段階）。
