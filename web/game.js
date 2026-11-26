@@ -476,7 +476,6 @@ function buildFloor(floorDef, arrive = 'start', restore = null) {
   world.projectiles = [];
   world.fieldKey = null;
   world.groupSeq = 0;
-  world.raiderWarned = false;
   world.reinforce = {};
   for (const el of document.querySelectorAll('.ebar')) el.remove();
   const rnd = seeded(floorDef.id * 7919 + (floorDef.generator ? (world.run?.seed ?? 1) : 0));
@@ -1059,6 +1058,21 @@ function lineOfSight(a, b) {
   return true;
 }
 
+// 2 点間をまっすぐ歩けるか（壁のほか、柱・木・記念碑などの障害物のマスも通れない）
+function walkLine(a, b) {
+  const dist = Math.hypot(b.x - a.x, b.z - a.z);
+  const steps = Math.ceil(dist / 0.5);
+  const r0 = Math.round(b.z / T), c0 = Math.round(b.x / T);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps, x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
+    const r = Math.round(z / T), c = Math.round(x / T);
+    if (r === r0 && c === c0) break;   // 相手のいるマスまで来たら OK
+    const ch = world.grid[r]?.[c];
+    if (ch === undefined || ch === '#' || 'PTM'.includes(ch)) return false;
+  }
+  return true;
+}
+
 // マス目の幅優先探索で、目標へ向かう次のマスの中心を返す
 // allowSafe：安全地帯も通る（略奪者）。maxDist：どこまで探すか（マス。略奪者は階層の端から端まで探す）
 function nextStepToward(from, to, allowSafe = false, maxDist = 30) {
@@ -1578,7 +1592,7 @@ function updateMonsters(dt) {
     const playerSafe = isSafeCell(Math.round(player.pos.z / T), Math.round(player.pos.x / T));
     // 略奪者（人間）は安全地帯にも入ってくるし、一度見つけたらどこまでも追ってくる
     const sees = (!playerSafe || def.human) && dist < def.aggroRange && lineOfSight(m.pos, player.pos);
-    if (sees && !m.aggro) { m.aggro = true; onAggro(m); if (def.human) raiderSpotted(m); }
+    if (sees && !m.aggro) { m.aggro = true; onAggro(m); }
     if (m.aggro && !def.human && (dist > def.aggroRange * 1.8 || playerSafe)) m.aggro = false;   // 安全地帯には追ってこない
     const prevX = m.pos.x, prevZ = m.pos.z;
     m.cooldown = Math.max(0, m.cooldown - dt);
@@ -1627,7 +1641,7 @@ function updateMonsters(dt) {
           }
           // 遠距離攻撃の魔物は、間合いの内側では近づかない
           if (dist > def.attackRange * (def.ranged ? 0.75 : 0.8)) {
-            if (sees) moveDir = toP.clone().normalize();
+            if (sees && walkLine(m.pos, player.pos)) moveDir = toP.clone().normalize();
             else {
               m.pathTimer -= dt;
               if (m.pathTimer <= 0 || !m.path) { m.path = nextStepToward(m.pos, player.pos, def.human, def.human ? 999 : 30); m.pathTimer = 0.5; }
@@ -2014,11 +2028,6 @@ function spawnRaiders([lo, hi], minDist = 28, grade = null) {
   world.raidersHere = true;
   log('どこかで冒険者の悲鳴が聞こえた……。この層には略奪者がいるかもしれない。');
   return out;
-}
-function raiderSpotted(m) {
-  if (world.raiderWarned) return;
-  world.raiderWarned = true;
-  log(`${m.def.name}に見つかった！ 襲ってくるぞ。`);
 }
 // 倒したとき：装備・アイテム・魔石の袋を確率で落とす（精髄と魔石そのものは落とさない）
 function raiderDrops(m) {
