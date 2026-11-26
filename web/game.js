@@ -1317,7 +1317,7 @@ function killMonster(m) {
   save.kills[m.def.id] = (save.kills[m.def.id] || 0) + 1;
   onFieldKill(m);
   // 功績
-  if (save.kills[m.def.id] === 1) gainFeat('firstKill', { name: D.MONSTERS[m.def.id].name });
+  if (save.kills[m.def.id] === 1 && !m.def.human) gainFeat('firstKill', { name: D.MONSTERS[m.def.id].name });
   if (m.boss) gainFeat('boss', { name: m.def.name });
   if (m.def.id.startsWith('abyss_')) gainFeat('abyss', { name: m.def.name });
   if (m.def.id === 'orc_hero') gainFeat('orcHero');
