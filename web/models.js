@@ -133,7 +133,24 @@ function makeHumanoid(look = {}) {
   if (L.weapon === 'staff') { const st = cyl(0.03, 0.03, 1.2, wcol); st.position.y = 0.1; weapon.add(st);
     const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1, 0), new THREE.MeshBasicMaterial({ color: L.magic ?? 0x9b6bff })); orb.position.y = 0.72; weapon.add(orb); }
   if (L.weapon === 'claw') { for (const s of [-1, 0, 1]) { const c = box(0.03, 0.03, 0.2, 0xe8e2d0); c.position.set(s * 0.05, -0.02, -0.12); weapon.add(c); } }
-  if (L.shield) { const sh = box(0.08, 0.6, 0.5, L.shield); sh.position.set(-0.08, -0.4, -0.1); armL.add(sh); }
+  if (L.shield) { const sh = box(0.08, 0.6, 0.5, L.shield, L.shieldMetal ? { metalness: 0.6, roughness: 0.35 } : undefined); sh.position.set(-0.08, -0.4, -0.1); armL.add(sh);
+    if (L.shieldBoss) { const b = box(0.04, 0.16, 0.16, L.shieldBoss, { metalness: 0.8, roughness: 0.3 }); b.position.set(-0.13, -0.4, -0.1); armL.add(b); } }
+  // ---- 強い個体の装飾（略奪者の等級など）
+  if (L.weaponGlow) weapon.traverse(o => { if (o.isMesh && o.material.emissive) { o.material = o.material.clone(); o.material.emissive.setHex(L.weaponGlow); o.material.emissiveIntensity = 0.9; } });
+  if (L.pauldron) for (const [arm, sx] of [[armL, -1], [armR, 1]]) {   // 肩当て
+    const pd = box(0.24 * W, 0.12, 0.26 * W, L.pauldron, { metalness: 0.6, roughness: 0.35 }); pd.position.set(sx * 0.03, 0.04, 0); pd.rotation.z = sx * 0.25; arm.add(pd);
+    if (L.spikes) { const sp = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.16, 4), flatMat(L.spikes, { metalness: 0.7, roughness: 0.3 })); sp.position.set(sx * 0.08, 0.16, 0); arm.add(sp); }
+  }
+  if (L.belt) { const bt = box(0.52 * W, 0.08, 0.38 * W, L.belt, { metalness: 0.5, roughness: 0.4 }); bt.position.y = 0.53; body.add(bt); }
+  if (L.cape) { const cp = box(0.5 * W, 0.85, 0.04, L.cape); cp.position.set(0, 0.62, 0.21 * W); cp.rotation.x = 0.12; body.add(cp); }
+  if (L.horns && (L.head === 'helm' || L.head === 'hood')) for (const sx of [-1, 1]) {
+    const h = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.3, 5), flatMat(L.horns)); h.position.set(sx * 0.22, 0.42, 0); h.rotation.z = -sx * 0.6; head.add(h);
+  }
+  if (L.plume) { const pl = box(0.06, 0.16, 0.4, L.plume); pl.position.set(0, 0.5, 0.02); head.add(pl); }
+  if (L.aura) {   // 足もとの光の輪
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.62, 24), new THREE.MeshBasicMaterial({ color: L.aura, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03; ring.name = 'aura'; g.add(ring);
+  }
   g.scale.setScalar(L.size);
   return { group: g, parts: { kind: 'biped', body, legL, legR, armL, armR, head, weapon } };
 }

@@ -70,6 +70,8 @@ const input = new Input($('#app'));
 
 // ====================================================================== ステータス計算
 const recipeBonus = id => D.RECIPES.find(r => r.id === id)?.bonus ?? 0;
+// 工房での強化の合計（stat: 'attack' | 'hp'）。強化の種類（makes）ごとに 回数 × bonus
+const craftBonus = stat => D.RECIPES.filter(r => r.id === r.makes && r.stat === stat).reduce((sum, r) => sum + (save[r.makes] ?? 0) * r.bonus, 0);
 
 // ====================================================================== 功績・経験値・レベル
 // 功績を上げると経験値が入り、たまるとレベルが上がる（D.FEATS / D.LEVEL）
@@ -135,9 +137,9 @@ function computeStats() {
   return {
     race, stats, passives, weapon, armor,
     capacity: race.soulCapacity, used,
-    maxHp: Math.round(F.hpBase + stats.VIT * F.hpPerVIT + armor.hpBonus + (save.patch ?? 0) * recipeBonus('patch')),
+    maxHp: Math.round(F.hpBase + stats.VIT * F.hpPerVIT + armor.hpBonus + craftBonus('hp')),
     maxStamina: Math.round(F.staminaBase + stats.VIT * F.staminaPerVIT + stats.AGI * F.staminaPerAGI),
-    attack: stats.STR * F.attackPerSTR + weapon.attackBonus + (save.hone ?? 0) * recipeBonus('hone'),
+    attack: stats.STR * F.attackPerSTR + weapon.attackBonus + craftBonus('attack'),
     level: lv,
     moveSpeed: (F.moveSpeedBase + stats.AGI * F.moveSpeedPerAGI) * mult('', 'moveSpeedMultiplier'),
     meleeMultiplier: mult('', 'meleeDamageMultiplier'),
@@ -1363,22 +1365,39 @@ function warmUpDrops(root) {
 }
 
 // 落とし物（素材の袋・回復薬・松明）。近づくと自動で拾う
-const LOOT_LOOK = { mat: 0xb08a5a, potion: 0xe04a4a, torch: 0xffa040 };
+const LOOT_LOOK = { mat: 0xb08a5a, potion: 0xe04a4a, torch: 0xffa040, returnScroll: 0xf0e0b0, oblivion: 0xb070ff };
+const RARE_LOOK = { 1: 0x9ad0ff, 2: 0xffc040 };   // 珍しい素材（上の等級の略奪者の装備）の色
 function placeLoot(x, z, kind, id, payload = null) {
   const g = new THREE.Group();
   const color = kind === 'mat' ? LOOT_LOOK.mat : LOOT_LOOK[id] ?? 0xffffff;
   let body;
-  if (kind === 'mat') { body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.17, 0), flatMat(color)); body.scale.set(1, 0.8, 1); }
+  const rare = kind === 'mat' ? (D.MATERIALS[id]?.rare ?? 0) : (id === 'returnScroll' || id === 'oblivion') ? 2 : 0;
+  if (kind === 'mat' && rare) {
+    const c = RARE_LOOK[rare];
+    body = new THREE.Mesh(new THREE.OctahedronGeometry(0.2 + rare * 0.03, 0), new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.6, metalness: 0.6, roughness: 0.3 }));
+  }
+  else if (kind === 'mat') { body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.17, 0), flatMat(color)); body.scale.set(1, 0.8, 1); }
+  else if (id === 'returnScroll') { body = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 8), new THREE.MeshStandardMaterial({ color, emissive: 0x806020, emissiveIntensity: 0.5 })); body.rotation.z = Math.PI / 2;
+    const rib = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.06, 8), new THREE.MeshStandardMaterial({ color: 0xc02a2a })); body.add(rib); }
+  else if (id === 'oblivion') { body = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.7 }));
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.12, 6), new THREE.MeshStandardMaterial({ color: 0xd8d0e8 })); neck.position.y = 0.15; body.add(neck); }
   else if (kind === 'bag') { body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 7, 5), flatMat(0x7a5a3a)); body.scale.set(1, 0.85, 1);
     const tie = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.14, 5), new THREE.MeshStandardMaterial({ color: 0x55c8ff, emissive: 0x2a6aa0 })); tie.position.y = 0.2; body.add(tie); }
   else if (id === 'potion') { body = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.3, 6), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4 })); }
   else { body = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.45, 5), flatMat(0x6a4a2a)); const f = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.16, 5), new THREE.MeshBasicMaterial({ color })); f.position.y = 0.28; body.add(f); }
   body.position.y = 0.25;
   g.add(body);
+  if (rare) {   // 珍しい物は光の柱で遠くからでもわかる
+    const c = kind === 'mat' ? RARE_LOOK[rare] : color;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.12, 3.2, 6, 1, true), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+    beam.position.y = 1.6; g.add(beam);
+  }
   g.position.set(x, 0, z);
   world.root.add(g);
   world.loot.push({ group: g, body, pos: g.position, kind, id, payload, t: Math.random() * 5 });
 }
+const ITEM_KEY = { potion: 'potions', torch: 'torches', returnScroll: 'returnScrolls', oblivion: 'oblivion' };
+const canCarry = id => D.HUB[id].max === undefined || (save[ITEM_KEY[id]] ?? 0) < D.HUB[id].max;
 function pickLoot(l) {
   if (l.kind === 'bag') {
     mergeStones(world.run.stones, l.payload ?? {});
@@ -1386,12 +1405,14 @@ function pickLoot(l) {
   }
   if (l.kind === 'mat') {
     world.run.mats[l.id] = (world.run.mats[l.id] || 0) + 1;
+    if (D.MATERIALS[l.id].rare) log(`珍しい${D.MATERIALS[l.id].name}を手に入れた！（拠点で高く売れる・工房で使える）`);
     return D.MATERIALS[l.id].name;
   }
   const H = D.HUB[l.id];
-  const key = l.id === 'potion' ? 'potions' : 'torches';
-  if (save[key] >= H.max) return null;   // もう持てない
-  save[key]++;
+  const key = ITEM_KEY[l.id];
+  if (!canCarry(l.id)) return null;   // もう持てない
+  if (l.id === 'returnScroll' || l.id === 'oblivion') log(`貴重な${H.name}を手に入れた！`);
+  save[key] = (save[key] ?? 0) + 1;
   return H.name;
 }
 
@@ -1846,7 +1867,7 @@ function updatePickups(dt) {
     l.body.position.y = 0.25 + Math.sin(l.t * 3) * 0.05;
     const d = Math.hypot(player.pos.x - l.pos.x, player.pos.z - l.pos.z);
     // 近づくと吸い寄せられる（持てない物は寄ってこない）
-    const canTake = l.kind === 'mat' || l.kind === 'bag' || save[l.id === 'potion' ? 'potions' : 'torches'] < D.HUB[l.id].max;
+    const canTake = l.kind === 'mat' || l.kind === 'bag' || canCarry(l.id);
     if (d < 3 && canTake && !player.dead) {
       l.pos.x += (player.pos.x - l.pos.x) * Math.min(1, dt * 6);
       l.pos.z += (player.pos.z - l.pos.z) * Math.min(1, dt * 6);
@@ -1992,6 +2013,8 @@ function spawnRaiders([lo, hi], minDist = 28, grade = null) {
   }
   world.raidersHere = true;
   log('どこかで冒険者の悲鳴が聞こえた……。この層には略奪者がいるかもしれない。');
+  const tier = D.raiderTier(g);
+  if (tier !== D.RAIDERS.tiers[0]) log(tier === D.RAIDERS.tiers[2] ? '……ただならぬ殺気を感じる。歴戦の略奪者が潜んでいるかもしれない。' : '……手練れの気配がする。');
   return out;
 }
 function raiderSpotted(m) {
@@ -2003,9 +2026,10 @@ function raiderSpotted(m) {
 function raiderDrops(m) {
   const at = () => [m.pos.x + (Math.random() - 0.5) * 1.6, m.pos.z + (Math.random() - 0.5) * 1.6];
   const bag = {};
-  for (const [id, ch] of D.RAIDERS.drops) {
+  const tier = D.raiderTier(m.def.grade);
+  for (const [id, ch] of tier.drops) {
     if (!(Math.random() < ch || world.forceLoot)) continue;
-    if (id === 'bag') { const B = D.RAIDERS.bag; const n = B.count[0] + Math.floor(Math.random() * (B.count[1] - B.count[0] + 1)); for (let i = 0; i < n; i++) addStone(bag, Math.min(9, m.def.grade + B.grades[Math.floor(Math.random() * B.grades.length)])); }
+    if (id === 'bag') { const B = D.RAIDERS.bag, C = tier.bag.count; const n = C[0] + Math.floor(Math.random() * (C[1] - C[0] + 1)); for (let i = 0; i < n; i++) addStone(bag, Math.min(9, m.def.grade + B.grades[Math.floor(Math.random() * B.grades.length)])); }
     else if (D.MATERIALS[id]) placeLoot(...at(), 'mat', id);
     else placeLoot(...at(), 'item', id);
   }

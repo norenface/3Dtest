@@ -503,6 +503,10 @@ export const MATERIALS = {
   orc_trophy: { name: 'オークの戦利品', price: 42 },
   raider_blade: { name: '略奪者の剣', price: 60 },
   raider_armor: { name: '略奪者の革鎧', price: 50 },
+  veteran_blade: { name: '歴戦の鋼剣', price: 240, rare: 1 },        // 6〜5 等級の略奪者が落とす
+  veteran_mail: { name: '歴戦の鎖帷子', price: 210, rare: 1 },
+  master_blade: { name: '名工の魔剣', price: 900, rare: 2 },         // 4〜3 等級の略奪者が落とす
+  master_armor: { name: '名工の重鎧', price: 780, rare: 2 },
 };
 // 魔物ごとの素材の種類（ないものは体の型から決める）
 const MAT_KIND = {
@@ -541,9 +545,14 @@ export const RECIPES = [
   { id: 'potion', name: '回復薬', makes: 'potion', needs: { glow_moss: 2 }, desc: '光苔をすりつぶして回復薬を作る。' },
   { id: 'torch', name: '松明', makes: 'torch', needs: { animal_fat: 2 }, desc: '獣脂を布に染み込ませて松明を作る。' },
   { id: 'potion2', name: '回復薬（樹液）', makes: 'potion', needs: { tree_sap: 2 }, desc: '樹液を煮詰めて回復薬を作る。' },
-  { id: 'hone', name: '武器を研ぐ', makes: 'hone', needs: { ore_chunk: 3, rusty_blade: 2 }, max: 5, bonus: 2, desc: '攻撃力 +2（5 回まで）。' },
-  { id: 'patch', name: '防具を補強する', makes: 'patch', needs: { beast_hide: 3, bone_shard: 2 }, max: 5, bonus: 6, desc: '最大 HP +6（5 回まで）。' },
+  { id: 'hone', name: '武器を研ぐ', makes: 'hone', stat: 'attack', needs: { ore_chunk: 3, rusty_blade: 2 }, max: 5, bonus: 2, desc: '攻撃力 +2（5 回まで）。' },
+  { id: 'patch', name: '防具を補強する', makes: 'patch', stat: 'hp', needs: { beast_hide: 3, bone_shard: 2 }, max: 5, bonus: 6, desc: '最大 HP +6（5 回まで）。' },
   { id: 'hone2', name: '武器を研ぐ（略奪者の剣を使う）', makes: 'hone', needs: { raider_blade: 1, ore_chunk: 1 }, max: 5, desc: '略奪者の剣を溶かして刃を鍛える。攻撃力 +2（研ぐ回数に数える）。' },
+  // 上の等級の略奪者の装備から作る強化（研ぐ・補強とは別に数える）。stat: attack（攻撃力）/ hp（最大 HP）
+  { id: 'forge', name: '鋼剣で鍛え直す', makes: 'forge', stat: 'attack', needs: { veteran_blade: 1, ore_chunk: 2 }, max: 3, bonus: 6, desc: '歴戦の鋼剣を打ち直して武器に重ねる。攻撃力 +6（3 回まで）。' },
+  { id: 'plate', name: '鎖帷子を仕込む', makes: 'plate', stat: 'hp', needs: { veteran_mail: 1, beast_hide: 2 }, max: 3, bonus: 18, desc: '歴戦の鎖帷子を防具の下に仕込む。最大 HP +18（3 回まで）。' },
+  { id: 'masterwork', name: '魔剣の刃を移す', makes: 'masterwork', stat: 'attack', needs: { master_blade: 1 }, max: 2, bonus: 15, desc: '名工の魔剣の刃を自分の武器に移す。攻撃力 +15（2 回まで）。' },
+  { id: 'masterguard', name: '重鎧の板金を張る', makes: 'masterguard', stat: 'hp', needs: { master_armor: 1 }, max: 2, bonus: 40, desc: '名工の重鎧の板金を防具に張る。最大 HP +40（2 回まで）。' },
   { id: 'patch2', name: '防具を補強する（略奪者の革鎧を使う）', makes: 'patch', needs: { raider_armor: 1, beast_hide: 1 }, max: 5, desc: '略奪者の革鎧を当て布にする。最大 HP +6（補強の回数に数える）。' },
 ];
 
@@ -555,13 +564,29 @@ export const DEBUG = { menu: true };
 // 迷宮に入った冒険者を襲う人間たち（8〜3 等級）。出現率は低いが、浅い層では魔物以上の脅威になる。
 //  ・階層に入ったとき、深さごとの確率（chance）でパーティ（party 人。3 人以上なら頭目つき）が潜んでいる
 //  ・獲物を探して階層を歩き回り、一度見つけたらどこまでも追ってくる。魔物と違って安全地帯にも入ってくる
-//  ・倒すと装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。精髄と魔石は落とさない
+//  ・倒すと装備（売れる・工房で使える）・回復薬・松明・魔石の袋を落とす。上の等級ほど良い物（帰還の巻物・忘却の霊薬も）。精髄と魔石は落とさない
 export const RAIDERS = {
   byDepth: { 1: { chance: 0.25, party: [1, 2] }, 2: { chance: 0.35, party: [2, 3] }, 3: { chance: 0.2, party: [2, 4] } },
   members: [['raider_sword', 4], ['raider_archer', 2], ['raider_dwarf', 1]],
   leader: 'raider_boss',
-  drops: [['raider_blade', 0.45], ['raider_armor', 0.3], ['potion', 0.3], ['torch', 0.25], ['bag', 0.35]],
-  bag: { grades: [2, 2, 1], count: [2, 5] },   // 魔石の袋の中身：略奪者の等級 + この数の等級の魔石（9 等級より下にはならない）
+  // 等級帯（tier）ごとの落とし物と見た目。上の等級ほど強そうで、良い物を落とす
+  //  drops: [[ID, 確率], ...]（同じ ID を複数書くと複数個落とすことがある）。ID は素材・potion・torch・returnScroll（帰還の巻物）・oblivion（忘却の霊薬）・bag（魔石の袋）
+  //  bag.count: 魔石の袋に入っている魔石の数 / look: 見た目に重ねる設定 / size: 大きさの倍率
+  tiers: [
+    { grades: [8, 7], label: '',
+      drops: [['raider_blade', 0.45], ['raider_armor', 0.3], ['potion', 0.3], ['torch', 0.25], ['bag', 0.35]],
+      bag: { count: [2, 5] }, size: 1, look: {} },
+    { grades: [6, 5], label: '手練れ',
+      drops: [['veteran_blade', 0.45], ['veteran_mail', 0.35], ['raider_blade', 0.3], ['potion', 0.55], ['potion', 0.3], ['torch', 0.35], ['returnScroll', 0.06], ['bag', 0.6]],
+      bag: { count: [4, 8] }, size: 1.1,
+      look: { armor: 0x8a909a, head: 'helm', pauldron: 0xa8b0bc, belt: 0x4a3a2a, weaponColor: 0xe8eef8, eye: 0xffd040, plume: 0x9a2a2a } },
+    { grades: [4, 3], label: '歴戦',
+      drops: [['master_blade', 0.5], ['master_armor', 0.4], ['veteran_blade', 0.4], ['veteran_mail', 0.3], ['potion', 0.75], ['potion', 0.5], ['torch', 0.4], ['returnScroll', 0.25], ['oblivion', 0.08], ['bag', 0.9]],
+      bag: { count: [6, 12] }, size: 1.2,
+      look: { armor: 0x2a2a34, cloth: 0x1a1a22, head: 'helm', pauldron: 0xc8a040, spikes: 0xe0d0a0, belt: 0xc8a040, cape: 0x6a1020, horns: 0xe0d6c0,
+        weaponColor: 0x30303a, weaponGlow: 0xff4020, eye: 0xff3010, aura: 0xff5020, shield: 0x2a2a34, shieldMetal: true, shieldBoss: 0xc8a040 } },
+  ],
+  bag: { grades: [2, 2, 1] },   // 魔石の袋の中身：略奪者の等級 + この数の等級の魔石（9 等級より下にはならない）
   // 略奪者の等級（8〜3 等級）。パーティごとに深さの重み表から 1 つ選ぶ（頭目はそれより 1 つ上。3 等級が上限）。
   // 浅い層ほど低い等級がとても出やすく、高い等級ほど出にくい。1 層の 4・3 等級は 1000 回に 1 回ほど
   gradeWeights: {
@@ -576,9 +601,16 @@ export const RAIDERS = {
 export function raiderDefAt(id, grade) {
   const b = MONSTERS[id];
   const [h0, a0] = GRADE_BASE[b.grade], [h1, a1] = GRADE_BASE[grade];
-  return { ...b, grade, name: `${b.name}［${grade}等級］`,
+  const t = raiderTier(grade);
+  const look = { ...b.look, ...t.look, size: (b.look.size ?? 1) * t.size };
+  if (b.look.weapon === 'bow') { delete look.shield; delete look.shieldBoss; if (look.head === 'helm' && !t.look.horns) look.head = 'hood'; }   // 弓使いは盾を持たない
+  if (b.look.head === 'helm' && b.look.weapon === 'club') look.weaponColor = t.look.weaponColor ?? b.look.weaponColor;
+  return { ...b, grade, look, tier: RAIDERS.tiers.indexOf(t), name: `${t.label ? t.label + 'の' : ''}${b.name}［${grade}等級］`,
     hp: Math.round(b.hp * h1 / h0), attack: Math.round(b.attack * a1 / a0),
     defense: Math.max(0, b.defense + (b.grade - grade) * RAIDERS.defensePerGrade) };
+}
+export function raiderTier(grade) {
+  return RAIDERS.tiers.find(t => t.grades.includes(grade)) ?? RAIDERS.tiers[0];
 }
 export function rollRaiderGrade(depth) {
   const W = RAIDERS.gradeWeights[depth] ?? RAIDERS.gradeWeights.deep;
@@ -690,4 +722,5 @@ export const NEW_GAME = {
   mats: {},           // 素材 { 素材 ID: 個数 }
   hone: 0,            // 工房で武器を研いだ回数
   patch: 0,           // 工房で防具を補強した回数
+  forge: 0, plate: 0, masterwork: 0, masterguard: 0,   // 上の等級の略奪者の装備を使った強化の回数
 };
